@@ -1,0 +1,57 @@
+# --- personal / machine-local, never published ---
+CLAUDE.local.md
+AGENTS.local.md
+.claude/settings.local.json
+.mcp.local.json
+.env
+.env.*
+!.env.example
+
+# --- secrets ---
+*.pem
+*.key
+credentials.json
+**/secrets/
+
+# --- browser + run artifacts ---
+.playwright-mcp/
+browser-profiles/
+profiles/
+runs/
+transcripts/
+screenshots/
+traces/
+*.har
+*.zip
+
+# --- reference dumps (schemas, scraped docs) ---
+reference/
+
+# --- node ---
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+.npm/
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# --- editors / os ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- scratch ---
+tmp/
+temp/
+scratch/
+*.local

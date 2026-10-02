@@ -33,7 +33,7 @@
             1. how to process the resources given based on business logic:
                 Eg: you can have a business reports in pdf, excel --> how to extract them --> how does the actions taken on browser change based on the extracted data --> after extracting data from report we find out that company is in loss- the broswer actions to be taken is to start a pr campaign on meta ads --> after extracting and comapany in profit then we file for dividends on stock market for the year and reseach for top podcasts to appear on
 
-            2. how to take actions on broswes based on resources + business logic: Based on the "BUSINESS LOGIC" our next move is decided such as:
+            2. how to take actions on broswer based on resources + business logic: Based on the "BUSINESS LOGIC" our next move is decided such as:
                 - visiting meta adds and launching add campaign
                 - filing for dividends and researching youtuber podcasts most aligned with our company promotion
             Hence we need to have SEPARATE documentation to do ANY OF THE POSSIBLE TASKS
