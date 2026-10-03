@@ -11,10 +11,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, lanes, state
+from . import __version__, lanes, state, trace
 from .config import Config, ConfigError, Learned
 from .lanes import LaneError
 from .state import StateError
+from .trace import TraceError
 
 
 def _cmd_config_show(args: argparse.Namespace) -> int:
@@ -309,6 +310,43 @@ def _cmd_lanes_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_trace(args: argparse.Namespace) -> int:
+    """Decide from timestamps whether lanes overlapped, and exit non-zero if not.
+
+    Deliberately a gate. "They ran in parallel" is the claim this project has been
+    wrong about before, so it gets an exit code rather than a paragraph.
+    """
+    lanes_traced = trace.load(Path(args.path))
+    verdict = trace.judge(lanes_traced)
+
+    print(f"{len(verdict.lanes)} lanes, from {args.path}")
+    print()
+    print(f"  {'lane':<12} {'T0_start':<14} {'T1_loaded':<14} {'T3_end':<14}  seconds")
+    for lane in verdict.lanes:
+        def clock(mark: str) -> str:
+            return lane.marks[mark].strftime("%H:%M:%S.%f")[:-3]
+        print(f"  {lane.lane:<12} {clock('T0_start'):<14} {clock('T1_loaded'):<14} "
+              f"{clock('T3_end'):<14}  {lane.duration_seconds:>6.1f}")
+    print()
+
+    if verdict.concurrent:
+        print(f"  CONCURRENT: all {len(verdict.lanes)} lanes were alive together for "
+              f"{verdict.overlap_seconds:.1f}s")
+        print(f"    from {verdict.overlap_start.isoformat()} (latest load)")
+        print(f"    to   {verdict.overlap_end.isoformat()} (earliest end)")
+        return 0
+
+    print("  SERIAL: there is no instant at which every lane was alive.", file=sys.stderr)
+    print(f"    latest T1_loaded is after the earliest T3_end.", file=sys.stderr)
+    for first, second in verdict.serial_pairs:
+        print(f"    {first} had already finished before {second} started",
+              file=sys.stderr)
+    if not verdict.serial_pairs:
+        print("    no pair is cleanly sequential, so the lanes overlapped pairwise but "
+              "never all at once. Give each lane a longer hold.", file=sys.stderr)
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="autoweb",
@@ -407,6 +445,16 @@ def build_parser() -> argparse.ArgumentParser:
         "list", help="show existing lane agent files")
     llist.set_defaults(func=_cmd_lanes_list)
 
+    tr = sub.add_parser(
+        "trace",
+        help="decide from lane timestamps whether they really overlapped",
+        description="Reads the four marks each lane took inside its own browser and "
+                    "reports whether every lane was alive at the same instant. Exits "
+                    "non-zero when they were not, so it is usable as a gate.",
+    )
+    tr.add_argument("path", help="JSON of {lane: {T0_start: iso, ...}}")
+    tr.set_defaults(func=_cmd_trace)
+
     ln.set_defaults(func=lambda a: (ln.print_help(), 1)[1])
     return parser
 
@@ -439,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return args.func(args)
-    except (ConfigError, StateError, LaneError) as exc:
+    except (ConfigError, StateError, LaneError, TraceError) as exc:
         # These are the user's problem to fix, so they get a clean message naming the
         # key or the file, not a traceback.
         print(f"error: {exc}", file=sys.stderr)

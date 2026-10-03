@@ -292,3 +292,47 @@ def test_a_copied_profile_at_the_repo_root_cannot_be_committed(project):
         out = subprocess.run(["git", "check-ignore", "-v", candidate],
                              cwd=repo, capture_output=True, text=True)
         assert out.returncode == 0, f"{candidate} is NOT gitignored"
+
+
+# --- trace, the simultaneity gate -------------------------------------------
+
+
+def _trace_file(path, lanes):
+    path.write_text(json.dumps(lanes), encoding="utf-8")
+    return str(path)
+
+
+def _marks(t0, t1, t2, t3):
+    def at(sec):
+        return f"2026-10-03T14:00:{sec:02d}.000Z"
+    return {"T0_start": at(t0), "T1_loaded": at(t1), "T2_read": at(t2), "T3_end": at(t3)}
+
+
+def test_trace_exits_zero_when_every_lane_overlapped(project, tmp_path, capsys):
+    path = _trace_file(tmp_path / "t.json", {
+        "lane-1": _marks(0, 2, 28, 30),
+        "lane-3": _marks(1, 3, 27, 29),
+    })
+    assert run(["trace", path], project) == 0
+    assert "CONCURRENT" in capsys.readouterr().out
+
+
+def test_trace_exits_nonzero_when_lanes_took_turns(project, tmp_path, capsys):
+    """It is a gate. "They ran in parallel" is the claim this repo has been wrong about,
+    so it gets an exit code and not a paragraph."""
+    path = _trace_file(tmp_path / "t.json", {
+        "lane-1": _marks(0, 1, 4, 5),
+        "lane-3": _marks(6, 7, 9, 10),
+    })
+    assert run(["trace", path], project) == 1
+    err = capsys.readouterr().err
+    assert "SERIAL" in err
+    assert "lane-1 had already finished before lane-3 started" in err
+
+
+def test_trace_rejects_an_untrustworthy_trace_rather_than_judging_it(project, tmp_path):
+    path = _trace_file(tmp_path / "t.json", {
+        "lane-1": _marks(30, 20, 10, 0),
+        "lane-3": _marks(0, 1, 2, 3),
+    })
+    assert run(["trace", path], project) == 2
