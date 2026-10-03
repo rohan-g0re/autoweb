@@ -172,4 +172,4 @@ def load(path: Path) -> list[LaneTrace]:
     return parse(raw, source=str(path))
 
 
-__all__ = ["LaneTrace", "MARKS", "TraceError", "Verdict", "judge", "load", "parse"]
+__all__ = ["MARKS", "LaneTrace", "TraceError", "Verdict", "judge", "load", "parse"]

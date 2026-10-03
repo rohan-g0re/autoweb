@@ -224,7 +224,8 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
             if lane not in conflicts[host]:
                 conflicts[host].append(lane)
 
-    for key in sorted(root_cookies | {k for c in lane_cookies.values() for k in c}):
+    every_cookie = set(root_cookies) | {k for c in lane_cookies.values() for k in c}
+    for key in sorted(every_cookie):
         ancestor = root_cookies.get(key)
         base = None if ancestor is None else _text(ancestor.get("value"))
         changed = {name: cookies[key] for name, cookies in lane_cookies.items()
@@ -266,7 +267,8 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
     merged_cookies: dict[CookieKey, dict[str, Any]] = {}
     kept = updated = added = evicted_cookies = 0
 
-    for key in sorted(root_cookies | {k for c in lane_cookies.values() for k in c}):
+    every_cookie = set(root_cookies) | {k for c in lane_cookies.values() for k in c}
+    for key in sorted(every_cookie):
         host = _host_of(key[1])
         if _matches_any(host, evicted_hosts):
             if key in root_cookies:

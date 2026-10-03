@@ -19,7 +19,7 @@ from autoweb.trace import TraceError, judge, load, parse
 def marks(t0, t1, t2, t3):
     """Four ISO instants on one arbitrary day, given as seconds past the minute."""
     def at(sec: float) -> str:
-        whole = int(sec)
+        whole = sec
         ms = int(round((sec - whole) * 1000))
         return f"2026-10-03T14:0{whole // 60}:{whole % 60:02d}.{ms:03d}Z"
     return {"T0_start": at(t0), "T1_loaded": at(t1), "T2_read": at(t2), "T3_end": at(t3)}

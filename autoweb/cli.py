@@ -12,7 +12,8 @@ import sys
 from datetime import timezone
 from pathlib import Path
 
-from . import __version__, lanes, merge as merge_mod, state, trace
+from . import __version__, lanes, state, trace
+from . import merge as merge_mod
 from .config import Config, ConfigError, Learned
 from .lanes import LaneError
 from .merge import MergeError
@@ -350,15 +351,20 @@ def _cmd_trace(args: argparse.Namespace) -> int:
     print(f"{len(verdict.lanes)} lanes, from {args.path}")
     print()
     print(f"  {'lane':<12} {'T0_start':<14} {'T1_loaded':<14} {'T3_end':<14}  seconds")
+    def clock(lane_trace, mark: str) -> str:
+        """Normalised to UTC.
+
+        Printing each mark in its own offset would show 14:00:02 beside 19:30:03 and then
+        declare them concurrent, which is correct and reads like a bug. Defined outside
+        the loop so it cannot close over the loop variable.
+        """
+        return (lane_trace.marks[mark].astimezone(timezone.utc)
+                .strftime("%H:%M:%S.%f")[:-3])
+
     for lane in verdict.lanes:
-        def clock(mark: str) -> str:
-            # Normalised to UTC. Printing each mark in its own offset would show
-            # 14:00:02 beside 19:30:03 and then call them concurrent, which is correct
-            # and reads like a bug.
-            return (lane.marks[mark].astimezone(timezone.utc)
-                    .strftime("%H:%M:%S.%f")[:-3])
-        print(f"  {lane.lane:<12} {clock('T0_start'):<14} {clock('T1_loaded'):<14} "
-              f"{clock('T3_end'):<14}  {lane.duration_seconds:>6.1f}")
+        print(f"  {lane.lane:<12} {clock(lane, 'T0_start'):<14} "
+              f"{clock(lane, 'T1_loaded'):<14} "
+              f"{clock(lane, 'T3_end'):<14}  {lane.duration_seconds:>6.1f}")
     print()
 
     if verdict.concurrent:

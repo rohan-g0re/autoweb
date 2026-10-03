@@ -292,7 +292,8 @@ def test_a_copied_profile_at_the_repo_root_cannot_be_committed(project):
                       "pursuit-browser-profile/Default/Cookies",
                       "profile-copy/Default/Cookies"):
         out = subprocess.run(["git", "check-ignore", "-v", candidate],
-                             cwd=repo, capture_output=True, text=True)
+                             cwd=repo, capture_output=True, text=True,
+                             check=False)
         assert out.returncode == 0, f"{candidate} is NOT gitignored"
 
 
