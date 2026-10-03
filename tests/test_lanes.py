@@ -533,3 +533,15 @@ def test_a_settings_file_whose_allow_is_not_a_list_is_a_clear_error(tmp_path):
                     encoding="utf-8")
     with pytest.raises(LaneError, match="not a list"):
         sync_permissions(cfg)
+
+
+def test_a_lane_is_told_to_verify_its_own_page(tmp_path):
+    """The one failure a lane cannot otherwise see.
+
+    Under a broken isolation the trailing page report of `browser_wait_for` was observed
+    naming the page the lane expected while the tab had already moved, so the lane
+    reported one site's content under another site's name with no error anywhere.
+    """
+    body = lane_markdown(1, config_at(tmp_path))
+    assert "location.href" in body
+    assert "browser_wait_for" in body

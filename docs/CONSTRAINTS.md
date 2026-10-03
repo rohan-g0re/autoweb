@@ -176,6 +176,32 @@ and current tab. These things about that, all **live**:
   once. A staggered dispatch and a parallel one are indistinguishable from inside the
   orchestrator, so this is only visible by counting processes from outside.
 
+- **Agent files are read once, at session startup.** **live.** `autoweb lanes sync`
+  rewrote five lane files mid-session. A session that was already running kept serving
+  the definitions it had cached, so four lanes dispatched from it connected to one
+  pre-change server named `lane`, while fresh sessions started afterwards correctly got
+  `mcp__lane1__*` through `mcp__lane5__*` and four separate browsers. Same files on
+  disk, opposite behaviour, decided only by when the session started. Treat lane files
+  like `.mcp.json`: editing them needs a restart, and the stale session has no way to
+  know it is stale.
+
+- **Under a shared tab, the tool output itself lies, and quietly.** **live.** Four
+  lanes on one server produced all of the following, with no error raised anywhere:
+  a `browser_navigate` response whose URL was `news.ycombinator.com` and whose title
+  was `Loading https://www.aljazeera.com/`, a torn read inside a single call; a
+  `browser_wait_for` whose trailing page block still named the lane's own page after a
+  sibling had already navigated the tab away; a `browser_snapshot` immediately after
+  that wait returning a third site entirely; and `browser_evaluate` of `location.href`
+  disagreeing with a `browser_navigate` response from three seconds earlier. A lane
+  that trusts any single one of these reports one site's content under another site's
+  name. This is the argument for a lane re-checking its own URL before it reports, and
+  the reason the generated lane body now tells it to.
+
+- **Cheap diagnostic for a shared server, no process poller needed.** **live.** Lanes
+  that are really separate write their page snapshots to separate output directories.
+  Interleaved timestamps in one `.playwright-mcp/` directory mean one server. Two lanes
+  reporting a single tab at index 0 whose site keeps changing mean the same thing.
+
 - **`browser_navigate` does not return the snapshot inline.** **live.** On 0.0.83 it
   writes the page to `.playwright-mcp/page-<timestamp>.yml` and returns a pointer, so a
   lane needs a separate `browser_snapshot` or a file read before it can act. The floor

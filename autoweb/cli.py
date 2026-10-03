@@ -232,6 +232,18 @@ def _cmd_lanes_sync(args: argparse.Namespace) -> int:
     print(f"  granted {len(granted)} lane servers in {lanes.LOCAL_SETTINGS_PATH} "
           f"({granted[0]} .. {granted[-1]})")
 
+    # Measured the hard way: a session that was already running kept serving the lane
+    # definitions it cached at startup. Four lanes then connected to one pre-change
+    # server, raced on a single tab, and each reported another lane's page as its own.
+    # Nothing errored. Say this every time rather than only when files changed, because
+    # the stale session cannot tell that it is stale.
+    if changed:
+        print()
+        print("  restart Claude Code before dispatching these lanes. Agent files are")
+        print("  read once at startup, like .mcp.json, so a session that is already")
+        print("  running will keep using the old ones and the lanes will share a")
+        print("  browser without reporting an error.")
+
     # Only isolated lanes are seeded from the file, so only they break without it.
     # A persistent lane never sees root.json and would be fine.
     if cfg.lanes.isolated and not cfg.root_state_path.is_file():

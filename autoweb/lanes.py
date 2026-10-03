@@ -187,6 +187,20 @@ Take a fresh snapshot after any navigation: refs belong to one snapshot of one p
 Use `browser_take_screenshot` when you need to see rendering rather than structure,
 or when a human will read your report.
 
+## Check your own page before you report
+
+Before you state any fact about a page, confirm you are still on the page you think you
+are. `browser_evaluate` of `location.href`, or the URL line of a fresh
+`browser_snapshot`, against the URL you were given.
+
+This is cheap and it catches the one failure that is otherwise invisible. If anything
+has gone wrong with your isolation you will be holding another lane's page, and the
+trailing page report of `browser_wait_for` has been observed to name the page you
+*expected* while the tab had already moved. A lane that trusts it reports one site's
+content under another site's name, with no error anywhere. Two snapshots of the same
+tab disagreeing, or a navigate whose URL and title name different sites, both mean the
+same thing: stop and say so rather than reporting the content.
+
 ## Report
 
 State what you did, what you found, and the URL every fact came from.
