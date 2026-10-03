@@ -186,10 +186,17 @@ def _cmd_state_inspect(args: argparse.Namespace) -> int:
     path = Path(args.path).resolve() if args.path else cfg.root_state_path
     summary = state.summarise(path)
 
+    # Two counts, because they differ by two orders of magnitude on a real profile and
+    # only one of them is interesting. 819 hosts set a cookie; four hold any storage. A
+    # single "819 origins carrying a session" reads as though the identity is enormous,
+    # when almost all of it is ad-tech that set a cookie and stored nothing.
+    stored = [o for o in summary.origins if o.local_storage_keys or o.indexeddb_stores]
+    cookie_only = len(summary.origins) - len(stored)
     print(f"{summary.path}")
-    print(f"  {_human_bytes(summary.total_bytes)} total, {summary.cookies} cookies, "
-          f"{len(summary.origins)} origins "
-          f"({len(summary.origins_with_session)} carrying a session)")
+    print(f"  {_human_bytes(summary.total_bytes)} total, {summary.cookies} cookies "
+          f"across {len(summary.origins)} hosts")
+    print(f"  {len(stored)} origins hold localStorage or IndexedDB; "
+          f"{cookie_only} are cookies only")
     print()
     print(f"  {'origin':<48} {'cookies':>7} {'ls':>4} {'idb':>4} {'bytes':>9}")
     for origin in summary.origins:
@@ -207,7 +214,6 @@ def _cmd_state_inspect(args: argparse.Namespace) -> int:
     # domain. A real profile carries hundreds of ad-tech domains that set a cookie and
     # store nothing, and counting those reported OVER CAP on every real identity while
     # saying nothing about the thing the cap exists to bound.
-    stored = [o for o in summary.origins if o.local_storage_keys or o.indexeddb_stores]
     if len(stored) > cfg.caps.max_origins:
         over.append(f"max_origins ({len(stored)} origins with storage > "
                     f"{cfg.caps.max_origins})")

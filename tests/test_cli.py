@@ -121,6 +121,38 @@ def test_inspect_separates_cookie_origins_from_storage_origins(project, capsys):
     assert "2" in out          # two origins
 
 
+def test_inspect_separates_stored_origins_from_cookie_only_hosts(project, capsys):
+    """On a real profile these differ by two orders of magnitude: 819 hosts set a cookie
+    and four hold any storage. Reporting one number read as though the identity were
+    enormous, and it also tripped the max_origins cap on every real export."""
+    write_state(
+        project / "root.json",
+        origins=[{"origin": "https://real.example",
+                  "localStorage": [{"name": "t", "value": "1"}]}],
+        cookies=[{"name": "a", "value": "1", "domain": "adtech1.example", "path": "/"},
+                 {"name": "b", "value": "1", "domain": "adtech2.example", "path": "/"}],
+    )
+    assert run(["state", "inspect"], project) == 0
+    out = capsys.readouterr().out
+    assert "1 origins hold localStorage or IndexedDB" in out
+    assert "2 are cookies only" in out
+
+
+def test_inspect_does_not_trip_the_origin_cap_on_cookie_only_hosts(project, capsys):
+    """The cap exists to bound stored origins. Counting ad-tech cookie domains against it
+    reported OVER CAP on every real identity while saying nothing about what it bounds."""
+    (project / "autoweb.toml").write_text("[caps]\nmax_origins = 5\n", encoding="utf-8")
+    write_state(
+        project / "root.json",
+        origins=[{"origin": "https://real.example",
+                  "localStorage": [{"name": "t", "value": "1"}]}],
+        cookies=[{"name": f"c{n}", "value": "1", "domain": f"ad{n}.example", "path": "/"}
+                 for n in range(20)],
+    )
+    assert run(["state", "inspect"], project) == 0
+    assert "max_origins" not in capsys.readouterr().out
+
+
 def test_inspect_rejects_a_json_file_that_is_not_a_storage_state(project, capsys):
     """A plausible-looking JSON file that is not a storageState would otherwise be
     discovered only when a lane failed to log in."""
