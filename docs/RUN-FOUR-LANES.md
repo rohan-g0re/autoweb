@@ -54,23 +54,26 @@ than pretending.
 
 ## 3. Copy the profile. Copy, never point at the original.
 
-Pick one Pursuit profile. The personal one is preferable if both LinkedIn and Google are
-signed in there.
+Use the Pursuit **LinkedIn** profile, `~/Desktop/pursuit_linkedin/browser-profile-linkedin`.
+The alternative is `~/Desktop/pursuit_personal/browser-profile`; either works, and the
+LinkedIn one is the default because the tasks lean on LinkedIn. Make sure no browser is
+using the directory while you copy it.
 
 ```sh
-cp -r <the profile directory> .autoweb/profiles/source
+cp -r ~/Desktop/pursuit_linkedin/browser-profile-linkedin .autoweb/profiles/source
 git check-ignore -v .autoweb/profiles/source     # must print a match
 git status --porcelain                           # must stay empty
 ```
 
 Launching a browser on a profile directory locks it, and a copy means nothing here can
-damage the original. Make sure no browser is using it while you copy.
+damage the original.
 
 ## 4. Export the identity
 
 ```sh
 autoweb state export --from-profile .autoweb/profiles/source \
   --visit https://www.linkedin.com/feed/ \
+  --visit https://www.linkedin.com/mynetwork/ \
   --visit https://mail.google.com/ \
   --visit https://myaccount.google.com/
 ```
@@ -102,6 +105,18 @@ Then confirm the identity actually works before spending a lane on it:
 autoweb state verify https://www.linkedin.com/feed/ --expect-text "<your first name>"
 ```
 
+### If Google is not signed in, change the tasks
+
+`goals/four-lanes-one-identity.md` assumes both LinkedIn and Google are signed in. A
+LinkedIn-specific profile may hold only LinkedIn. If `inspect` shows no Google session,
+replace the two Google tasks in that document with two more read-only LinkedIn surfaces,
+`https://www.linkedin.com/mynetwork/` and `https://www.linkedin.com/notifications/`, and
+say in your report that you changed them and why. Four tasks and four lanes either way. Do
+not commit that edit.
+
+Do not work around a missing login. A login wall is a fact about one URL, and an honest
+"Google is not in this profile" is a result rather than a failure.
+
 ## 6. Lanes
 
 ```sh
@@ -112,10 +127,15 @@ autoweb lanes list
 `lanes.max` in `autoweb.toml` is the ceiling, and the count is never hardcoded anywhere.
 `sync` also grants `mcp__laneN` in the gitignored `.claude/settings.local.json`.
 
-**Now restart Claude Code.** Agent files are read once at startup, so a session that was
-already running keeps serving the old definitions. That failure is silent and has already
-cost one wasted run: stale lanes all connect to one server, share a single tab, and
-overwrite each other's page with no error anywhere.
+**Check that the lane agents are visible to you now.** New agent files are usually picked
+up without a restart, and `lane-1`, `lane-3` and so on should appear as agent types you can
+delegate to shortly after `sync`. If they do not appear, restart Claude Code and resume from
+this step.
+
+The reason to check rather than assume: agent definitions are cached at session start, so a
+session that already had lane files keeps serving the old ones after their contents change.
+That failure is silent and has already cost one wasted run, where stale lanes all connected
+to a single server, shared one tab, and overwrote each other's page with no error anywhere.
 
 ## 7. The test, and the part that must stay independent
 
