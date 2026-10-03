@@ -6,7 +6,8 @@
 
 [lanes]
 max = 5              # ceiling on concurrent lanes, never a target
-browser = "chrome"   # set to "chromium" on ARM Linux — Google ships no Chrome there
+browser = "chrome"   # set to "chromium" on most Linux; Chrome is x86_64-only,
+                     # absent from Arch repos, and nonexistent for ARM Linux
 mcp_version = "0.0.83"
 isolated = true      # nothing written to disk; what makes lanes safe in parallel
 

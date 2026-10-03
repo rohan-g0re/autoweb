@@ -171,12 +171,25 @@ and current tab. These things about that, all **live**:
   `playwright_chromiumdev_profile-*` directories per run, every lane calling only its
   own `mcp__laneN__*` tools, no lane touching `mcp__playwright__*`.
 
-- **Dispatching in separate messages silently serialises the lanes.** **live.** Both
-  runs above sent each delegation in its own message. Peak concurrent browsers was two
-  of four in the first run and three of four in the second, because an early lane
-  finished before a later one launched. Both runs then reported that all four had run at
-  once. A staggered dispatch and a parallel one are indistinguishable from inside the
-  orchestrator, so this is only visible by counting processes from outside.
+- **Four lane browsers do run at the same instant.** **live.** Four lanes dispatched in
+  one message, each holding its browser open for thirty seconds, produced four
+  concurrent `playwright_chromiumdev_profile-*` directories (plus one left over from an
+  earlier run), 16 playwright `node` processes against a baseline of 6, and around 100
+  chrome processes. Every lane then verified `location.href` after the hold and all four
+  still held their own page. Zero drift.
+
+  Earlier runs of the same shape peaked at only two or three concurrent browsers, and
+  the reason is task length rather than dispatch: a browser takes a few seconds to
+  start and a one-page read is about three calls, so short lanes come and go. A single
+  message buys overlap, not a guarantee of it.
+
+- **Beware of how you measure the dispatch, not just the browsers.** **live, and it
+  produced a false finding before it was caught.** `claude -p --output-format
+  stream-json` emits one event per content block, so a single assistant message holding
+  four `Agent` calls arrives as four separate events. Grouping tool calls by event makes
+  a correct parallel dispatch look like four staggered messages. Group by
+  `message.id`. Three runs were written up as staggered on the strength of the wrong
+  grouping, and the orchestrators had been right all along.
 
 - **Agent files are read once, at session startup.** **live.** `autoweb lanes sync`
   rewrote five lane files mid-session. A session that was already running kept serving

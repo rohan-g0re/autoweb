@@ -51,10 +51,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-]
 sdk = [
     { name = "claude-agent-sdk" },
     { name = "mcp" },
@@ -62,7 +58,9 @@ sdk = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pytest" },
     { name = "pyyaml" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -70,15 +68,17 @@ requires-dist = [
     { name = "claude-agent-sdk", marker = "extra == 'sdk'", specifier = ">=0.2" },
     { name = "mcp", marker = "extra == 'sdk'", specifier = ">=1.6.0" },
     { name = "playwright", specifier = ">=1.51" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "tomli-w", specifier = ">=1.0" },
 ]
-provides-extras = ["sdk", "dev"]
+provides-extras = ["sdk"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pyyaml", specifier = ">=6.0.3" }]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "ruff", specifier = ">=0.6" },
+]
 
 [[package]]
 name = "cffi"

@@ -75,7 +75,10 @@ class LaneConfig:
     ``chrome`` is playwright-mcp's own default and uses real Google Chrome.
     ``chromium`` means Chrome for Testing, which Playwright downloads.
 
-    Set this to ``chromium`` on ARM Linux, where Google ships no Chrome. Install the
+    Set this to ``chromium`` on most Linux. Google ships Chrome as a .deb/.rpm for
+    x86_64 only, it is absent from Arch's official repositories, and for ARM Linux it
+    does not exist at all. Measured on x86_64 Arch: no ``google-chrome`` binary, only
+    ``/usr/bin/chromium``. Install the
     build playwright-mcp expects with::
 
         npx @playwright/mcp@<version> install-browser chrome-for-testing

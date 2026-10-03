@@ -28,7 +28,10 @@ deferred**, not abandoned; the code stays POSIX-clean so it ports later.
   `engines: {node: ">=18"}`, but its bundled playwright-core 1.64 refuses to start:
   *"You are running Node.js 18.19.1. Playwright requires Node.js 20 or higher."*
   The package metadata is wrong. Our setup command and docs must say 20.
-- **ARM Linux has no Google Chrome**, so playwright-mcp's default `channel=chrome`
+- **Most Linux has no Google Chrome**, not only ARM. It ships as a .deb/.rpm for
+  x86_64, is absent from Arch's official repositories (AUR only), and does not exist
+  for ARM Linux at all. Measured on x86_64 Arch: only `/usr/bin/chromium`. So
+  playwright-mcp's default `channel=chrome`
   cannot work there. Any Linux lane needs `--browser chromium`. Windows ARM is fine —
   Chrome ships for it.
 - **WSL sudo needs a password here**, so `playwright install --with-deps` cannot run
@@ -127,8 +130,24 @@ its own message, so peak concurrency was two of four and then three of four. Bot
 claimed all four ran at once. The skill now leads with single-message dispatch and says
 why you cannot verify it from your own transcript.
 
-Still owed at this line: a run that proves four browsers alive *simultaneously*, and a
-run where the lanes are seeded with a real identity rather than an empty storageState.
+**Four browsers alive simultaneously: proven.** Four lanes dispatched in one message,
+each holding its browser for thirty seconds, gave four concurrent browser profiles, 16
+playwright `node` processes against a baseline of 6, and every lane still on its own page
+afterwards with zero URL drift. Each verified `location.href` itself rather than trusting
+the trailing page report of `browser_wait_for`, which is the check the lane body now
+prescribes.
+
+A correction worth keeping, because the mistake was in the measurement and not the
+system: three earlier runs were written up as dispatching lanes one per message. They had
+not. `claude -p --output-format stream-json` emits one event per content block, so one
+assistant message holding four `Agent` calls arrives as four events, and grouping by
+event instead of by `message.id` turned a correct parallel dispatch into a fabricated
+defect. The orchestrators were right and the analysis was wrong. Low concurrency in those
+runs was task length: a browser takes seconds to start and a one-page read is about three
+calls, so short lanes come and go.
+
+Still owed at this line: a run where the lanes are seeded with a real identity rather
+than an empty storageState.
 
 **The original reasoning, kept because it generalises.** Every gate before this was told
 that lanes exist and which ones to dispatch. That tests the mechanism and not the feature, because in real use

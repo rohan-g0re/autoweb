@@ -5,10 +5,13 @@
   both passed under an independent tester: logged in by hand, exported, killed
   everything, and a fresh browser seeded only from the JSON was still in the secure
   area, while an unseeded control run was redirected back to the login page.
-- browser profile parallel spawns. Built, not proven. `autoweb lanes sync` generates
-  one agent file per lane, each declaring its own inline MCP server so it gets its own
-  server process, its own browser and its own current tab. The re-gate's findings are
-  fixed but not re-verified, and no run has yet put three lanes on three sites at once.
+- [x] browser profile parallel spawns. `autoweb lanes sync` generates one agent file per
+  lane, each declaring its own inline MCP server so it gets its own server process, its
+  own browser and its own current tab. Three independent gates, the first two of which
+  failed on lanes that silently shared one browser. Proven: four lanes dispatched at once
+  held four concurrent browsers for a thirty second overlap, each still on its own page,
+  no lane touching another's tools, and a session told nothing about lanes found and used
+  them unaided. Owed: a run seeded with a real identity instead of an empty storageState.
 - browser profile "merge profile" after each parallel spawns ends (so that profile always stays updated)
 
 

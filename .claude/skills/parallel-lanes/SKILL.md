@@ -24,15 +24,15 @@ Delegate to the subagents named `lane-1`, `lane-3` and so on, one task each, and
 dispatched in its own message starts only after the previous message is done, so lanes
 you meant to overlap end up taking turns.
 
-It is easy to get this wrong while believing you got it right. Two measured runs
-dispatched four lanes correctly in every other respect, each in a separate message, and
-only two then three of the four browsers were ever alive at the same time: the first
-lane had finished before the last one started. Both runs reported "all four ran at
-once", because from inside the orchestrator a staggered dispatch and a parallel one look
-identical. You cannot tell from your own transcript. Send one message.
+Four measured runs all did this correctly, and four lane browsers were confirmed alive
+at the same instant, each lane still on its own page after a thirty second hold.
 
-A lane is also short. Reading one page is about three calls, so a lane often finishes
-inside the time it takes to send the next delegation.
+What those runs also showed is that **a single message buys you overlap, not a
+guarantee of it**. A browser takes a few seconds to come up, and reading one page is
+about three calls, so short lanes can still finish at staggered times and you may never
+see all of them running together. That is fine. It costs wall clock, not correctness,
+and the fix is to give a lane enough work to be worth a lane rather than to fight the
+scheduler.
 
 ## Decide how many
 

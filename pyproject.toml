@@ -27,7 +27,6 @@ dependencies = [
 [project.optional-dependencies]
 # Only needed once lanes move out of Claude Code and into their own processes.
 sdk = ["claude-agent-sdk>=0.2", "mcp>=1.6.0"]
-dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 autoweb = "autoweb.cli:main"
@@ -51,6 +50,14 @@ target-version = "py310"
 testpaths = ["tests"]
 
 [dependency-groups]
+# A dependency *group*, not an optional-dependency *extra*. `uv sync` installs groups
+# by default and extras only when asked, so the same name in the wrong table means a
+# fresh clone gets no test runner: `uv run pytest` then falls back to whatever pytest
+# is on PATH, which cannot import `autoweb` and fails with ModuleNotFoundError that
+# looks like a packaging bug rather than a missing dev dependency. Verified by cloning.
 dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    # test_lanes parses the generated agent frontmatter rather than grepping it.
     "pyyaml>=6.0.3",
 ]

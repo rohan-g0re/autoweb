@@ -71,9 +71,9 @@ These are load-bearing. Violating them is how this becomes another framework.
 | Engine | Claude Code |
 | Browser | `@playwright/mcp@0.0.83` over stdio, project-scoped `.mcp.json`, zero flags |
 | Language | Python (decided; TS only behind MCP or a CLI) |
-| Code | `autoweb/`: `config.py`, `state.py`, `lanes.py`, `cli.py`. 144 tests, ruff clean |
+| Code | `autoweb/`: `config.py`, `state.py`, `lanes.py`, `cli.py`. 184 tests, ruff clean |
 | CLI | `autoweb config show/check`, `state export/inspect/verify`, `lanes sync/list` |
-| Done | northstar lines 1 to 4. Line 5 is built and unproven, line 6 is not built |
+| Done | northstar lines 1 to 5. Line 6 is not built |
 
 `northstar.md` is the task list and the source of truth for sequencing.
 
@@ -102,15 +102,24 @@ the re-gate four, among them a `state verify` that exited 0 on a 404 and a `.tmp
 pair that would have put live session cookies in a committable file in a public repo.
 All are fixed, and the fixes were verified by running them.
 
-**Line 5, not proven.** `autoweb lanes sync` generates the lane agent files and 44 tests
-assert the frontmatter that ships. The tests are offline: they prove the right text was
-written, not that five subagents get five browsers. A re-gate found real defects there,
-the fixes are in but not re-verified, and nothing has yet run three lanes on three sites
-at once, which is the actual test.
+**Line 5.** `autoweb lanes sync` generates the lane agent files, and three independent
+gates plus two discovery runs stand behind them. The first two gates failed, both times
+on the same shape of defect: the generated file looked correct and the suite was green
+while every lane shared one browser. First `mcpServers` was a YAML mapping, which Claude
+Code ignores silently; then every lane named its inline server `lane`, and Claude Code
+de-duplicates inline servers by name across concurrent subagents. Each was found by
+counting browser processes, not by reading files.
 
-The 144 tests are all offline. They cover config parsing, state file accounting and lane
-file generation; none of them opens a browser, and `cli.py` has no tests at all. Passing
-them is not evidence that a browser works.
+What is proven: four lanes dispatched in one message produced four concurrent browser
+profiles, each lane still on its own page after a thirty second hold, zero URL drift, no
+lane touching another's tools. A fresh session told nothing about lanes discovered them
+and dispatched four correctly. Still owed on this line: a run where lanes carry a real
+identity rather than an empty storageState.
+
+The 184 tests are all offline. They cover config parsing, state file accounting, lane
+file generation and the CLI's exit codes; none of them opens a browser. Passing them is
+not evidence that a browser works, which is why every phase also has a gate that runs
+one.
 
 Note on scope: `playwright` is also defined at user scope on the author's machine with
 a `--user-data-dir`. Project scope wins here, and `claude mcp list` reports the
@@ -176,6 +185,14 @@ Load-bearing summary:
 
 - Prove it, then claim it. "Connected" means a browser opened and took an action in
   a transcript you can point at.
+- **Tests run on Linux.** The development machine is Windows on ARM64, which has no
+  Google Chrome story matching any deployment and a Python setup that gets in the way.
+  Code is written there; it is run and tested on an x86_64 Linux box. A green suite on
+  the Windows machine is not evidence.
+- Measure the thing, not a proxy for it. Every defect that survived a passing test suite
+  in this repo was found by counting processes, parsing the artifact that actually ships,
+  or asserting against a control run. Two were caused by trusting a grep, and one by
+  grouping a JSON stream by the wrong key.
 - MCP config is read **only at startup**. Editing `.mcp.json` needs a full restart.
 - Windows paths in JSON: forward slashes. `\U` and `\A` break the parse.
 - Everything here is public. No tokens, no credentials, no machine-specific paths
