@@ -71,9 +71,9 @@ These are load-bearing. Violating them is how this becomes another framework.
 | Engine | Claude Code |
 | Browser | `@playwright/mcp@0.0.83` over stdio, project-scoped `.mcp.json`, zero flags |
 | Language | Python (decided; TS only behind MCP or a CLI) |
-| Code | `autoweb/`: `config.py`, `state.py`, `lanes.py`, `cli.py`. 184 tests, ruff clean |
-| CLI | `autoweb config show/check`, `state export/inspect/verify`, `lanes sync/list` |
-| Done | northstar lines 1 to 5. Line 6 is not built |
+| Code | `autoweb/`: `config.py`, `state.py`, `lanes.py`, `merge.py`, `trace.py`, `cli.py`. Offline suite green on Linux, ruff clean |
+| CLI | `autoweb config show/check`, `state export/inspect/verify`, `lanes sync/list`, `trace`, `merge` |
+| Done | northstar lines 1 to 6, line 6 for a cookie-session site only |
 
 `northstar.md` is the task list and the source of truth for sequencing.
 
@@ -113,13 +113,53 @@ counting browser processes, not by reading files.
 What is proven: four lanes dispatched in one message produced four concurrent browser
 profiles, each lane still on its own page after a thirty second hold, zero URL drift, no
 lane touching another's tools. A fresh session told nothing about lanes discovered them
-and dispatched four correctly. Still owed on this line: a run where lanes carry a real
-identity rather than an empty storageState.
+and dispatched four correctly.
 
-The 184 tests are all offline. They cover config parsing, state file accounting, lane
-file generation and the CLI's exit codes; none of them opens a browser. Passing them is
-not evidence that a browser works, which is why every phase also has a gate that runs
-one.
+The debt on this line - that every lane run so far started from an empty `storageState` -
+is paid. Four lanes were then run from a copy of a real logged-in LinkedIn profile: four
+distinct `--user-data-dir` values held for 44 seconds measured from outside the run,
+`autoweb trace` exit 0 with all four alive together for 21.6 seconds, no drift, no
+authwall, and `li_at` and `JSESSIONID` byte-identical across `root.json` and all four
+lane files. The dispatching process was a fresh `claude -p` told nothing about AutoWeb.
+`T0_start` was staggered about 4.5 seconds per lane, so browser startup serialises and
+the overlap is what follows it.
+
+One prerequisite is load-bearing enough to repeat here: **the workspace folder must be
+trusted**, or Claude Code refuses to start an agent file's `mcpServers` and does so
+silently. An identical run with it untrusted dispatched four lanes and started zero
+browsers.
+
+**Line 6.** `autoweb merge` folds lane states back onto `root.json` as a three-way merge
+with root as the common ancestor. A merge of four real lane files was written and
+`autoweb state verify` then returned exit 0 against the LinkedIn feed, so an identity
+survives a merge. Running it is also the only thing that found its defects, three of
+which a green suite and three dry runs did not:
+
+- whole-origin eviction fired on per-browser bot-management values (`__cf_bm`, `_px3`,
+  `pxcts`, `__Secure-3PSIDCC`) and would have taken `root.json` to zero origins - signing
+  the identity out of LinkedIn as the result of a read-only run.
+- the first real write lost 737 partitioned cookie rows and reported `0 evicted`, because
+  the cookie identity ignored `partitionKey` and the summary counted identities rather
+  than rows.
+- the fix for that left a narrower version standing: Chromium's partition key is the pair
+  (top-level site, has-cross-site-ancestor), and the bit was kept for one of Playwright's
+  two encodings and dropped for the other.
+
+What line 6 does **not** cover: a site whose auth lives in IndexedDB or behind MFA, and a
+lane that writes rather than reads. Everything proven is proven for one cookie-session
+site.
+
+The suite is entirely offline. It covers config parsing, state file accounting, lane
+file generation, merge arithmetic, trace judgement and the CLI's exit codes; none of it
+opens a browser. A count is deliberately not quoted here, because it changes with every
+commit and a stale number in a file that claims to record verified facts is worse than no
+number.
+
+Passing it is not evidence that a browser works, which is why every phase also has a gate
+that runs one. It is not evidence that a merge works either: the suite was green, and
+three dry runs clean, while the merge was losing 737 cookie rows. Each of line 6's three
+defects was found by running the real thing and counting rows, never by a test - though
+each is now a test, which is the only part of that worth keeping.
 
 Note on scope: `playwright` is also defined at user scope on the author's machine with
 a `--user-data-dir`. Project scope wins here, and `claude mcp list` reports the
