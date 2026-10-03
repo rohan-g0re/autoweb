@@ -335,3 +335,66 @@ def test_learned_save_failure_leaves_no_temp_file(tmp_path, monkeypatch):
     with pytest.raises(ConfigError, match="cannot write"):
         Learned(rotates=["a.test"]).save(path)
     assert list(path.parent.iterdir()) == []
+
+
+# --- regressions from the Phase 1 Fable re-gate -----------------------------
+
+
+def test_duplicate_hosts_differing_by_case_rejected(tmp_path):
+    """Equal-specificity ties resolved by declaration order. Reject them instead."""
+    (tmp_path / "autoweb.toml").write_text(
+        '[origins."example.com"]\nsticky = true\n'
+        '[origins."EXAMPLE.COM"]\nrotates = true\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="same host"):
+        Config.load(tmp_path)
+
+
+def test_duplicate_hosts_differing_by_scheme_rejected(tmp_path):
+    (tmp_path / "autoweb.toml").write_text(
+        '[origins."https://example.com"]\nsticky = true\n'
+        '[origins."example.com"]\nrotates = true\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="same host"):
+        Config.load(tmp_path)
+
+
+@pytest.mark.parametrize("key", [".", "://", "/path"])
+def test_origin_key_without_a_host_rejected(tmp_path, key):
+    """A rule that can never match is worse than no rule: it reads as protection."""
+    (tmp_path / "autoweb.toml").write_text(
+        f'[origins."{key}"]\nsticky = true\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="never match"):
+        Config.load(tmp_path)
+
+
+def test_wildcard_origin_rejected_with_a_pointer(tmp_path):
+    """Wildcards silently never match; suffix matching already covers subdomains."""
+    (tmp_path / "autoweb.toml").write_text(
+        '[origins."*.example.com"]\nsticky = true\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="subdomain"):
+        Config.load(tmp_path)
+
+
+def test_learned_save_reports_unusable_parent_as_config_error(tmp_path):
+    """`.autoweb` existing as a file must not escape as a raw FileExistsError."""
+    blocker = tmp_path / ".autoweb"
+    blocker.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(ConfigError, match="cannot write learned facts"):
+        Learned(rotates=["a.test"]).save(blocker / "learned.json")
+
+
+def test_learned_save_cleanup_failure_does_not_mask_the_real_error(tmp_path,
+                                                                  monkeypatch):
+    """A failing unlink inside the handler must not replace the error it reports."""
+    path = tmp_path / ".autoweb" / "learned.json"
+    path.parent.mkdir(parents=True)
+
+    def boom_replace(self, target):
+        raise OSError("rename failed")
+
+    def boom_unlink(self, missing_ok=False):
+        raise OSError("unlink failed too")
+
+    monkeypatch.setattr("pathlib.Path.replace", boom_replace)
+    monkeypatch.setattr("pathlib.Path.unlink", boom_unlink)
+    with pytest.raises(ConfigError, match="rename failed"):
+        Learned(rotates=["a.test"]).save(path)

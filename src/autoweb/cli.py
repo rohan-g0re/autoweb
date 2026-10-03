@@ -234,7 +234,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _tolerate_unencodable_output() -> None:
+    """Never crash because a hostname will not fit the console encoding.
+
+    Windows consoles default to a legacy code page, so printing an internationalised
+    origin such as an IDN domain raises UnicodeEncodeError and takes the whole command
+    down with a traceback. The config was valid; only the printing failed. Degrade the
+    characters instead of the command.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="backslashreplace")
+            except (ValueError, OSError):  # pragma: no cover - exotic streams
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _tolerate_unencodable_output()
     parser = build_parser()
     args = parser.parse_args(argv)
 

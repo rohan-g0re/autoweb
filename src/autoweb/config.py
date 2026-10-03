@@ -300,6 +300,7 @@ class Config:
             )
 
         origins: dict[str, OriginRule] = {}
+        seen_hosts: dict[str, str] = {}
         for origin, rule in origins_raw.items():
             section = f"origins.{origin}"
             if not str(origin).strip():
@@ -308,6 +309,27 @@ class Config:
                 raise ConfigError(
                     f"{path}: '{section}' must be a table, got {type(rule).__name__}"
                 )
+            # A rule that can never match is worse than no rule: the user believes
+            # a site is protected and nothing enforces it.
+            if "*" in str(origin):
+                raise ConfigError(
+                    f"{path}: '{section}' - wildcards are not supported and would "
+                    f"never match. A rule on 'example.com' already covers every "
+                    f"subdomain."
+                )
+            host = _host_of(origin)
+            if not host:
+                raise ConfigError(
+                    f"{path}: '{section}' has no hostname, so it can never match"
+                )
+            # Two keys that normalise to the same host would resolve by declaration
+            # order, and order-dependent config is config you cannot reason about.
+            if host in seen_hosts:
+                raise ConfigError(
+                    f"{path}: '{section}' and 'origins.{seen_hosts[host]}' are the "
+                    f"same host ('{host}'). Keep one."
+                )
+            seen_hosts[host] = str(origin)
             origins[origin] = _build(OriginRule, rule, path, section)
 
         _validate(lanes, state, caps, path)
@@ -494,12 +516,21 @@ class Learned:
                    sticky=list(raw.get("sticky", [])))
 
     def save(self, path: Path) -> None:
-        """Write atomically, leaving no debris if the rename fails."""
-        path.parent.mkdir(parents=True, exist_ok=True)
+        """Write atomically, leaving no debris if the rename fails.
+
+        Every failure here becomes a ``ConfigError``, including the directory not
+        being creatable and the cleanup itself failing. A writer that raises a raw
+        ``PermissionError`` from its own error handler masks the error it was
+        reporting.
+        """
         tmp = path.with_suffix(path.suffix + ".tmp")
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(asdict(self), indent=2) + "\n", encoding="utf-8")
             tmp.replace(path)
         except OSError as exc:
-            tmp.unlink(missing_ok=True)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass        # cleanup is best-effort; the original error is what matters
             raise ConfigError(f"{path}: cannot write learned facts: {exc}") from exc
