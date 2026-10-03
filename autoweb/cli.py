@@ -11,9 +11,10 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, lanes, state, trace
+from . import __version__, lanes, merge as merge_mod, state, trace
 from .config import Config, ConfigError, Learned
 from .lanes import LaneError
+from .merge import MergeError
 from .state import StateError
 from .trace import TraceError
 
@@ -347,6 +348,51 @@ def _cmd_trace(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_merge(args: argparse.Namespace) -> int:
+    """Fold lane states back into root.json. One writer, after every lane is dead."""
+    cfg = Config.load(args.dir)
+    root_path = Path(args.root).resolve() if args.root else cfg.root_state_path
+    lane_paths = [Path(p).resolve() for p in args.lanes]
+
+    result = merge_mod.merge_files(root_path, lane_paths, cfg)
+
+    print(f"merging {len(lane_paths)} lane file(s) onto {root_path}")
+    print()
+    print(f"  cookies: {result.cookies_kept} kept, {result.cookies_updated} updated, "
+          f"{result.cookies_added} added, {result.cookies_evicted} evicted")
+    print()
+    for decision in result.decisions:
+        who = f"  [{', '.join(decision.changed_by)}]" if decision.changed_by else ""
+        print(f"  {decision.action:<9} {decision.origin}{who}")
+        if decision.action == "evicted":
+            print(f"            {decision.reason}")
+    print()
+    print(f"  {len(result.state['origins'])} origins, "
+          f"{_human_bytes(result.total_bytes)} total")
+
+    for violation in result.rotating_violations:
+        # Loud, and on stderr, because this is the arrangement that gets a whole token
+        # family revoked. Not fatal: the damage, if any, has already happened.
+        print(f"  warning: {violation}. A site marked `rotates` should only ever be "
+              f"held by one lane.", file=sys.stderr)
+
+    if result.evicted_origins:
+        print()
+        print("  these need a fresh login:")
+        for origin in result.evicted_origins:
+            print(f"    {origin}")
+
+    if args.dry_run:
+        print()
+        print("  --dry-run: nothing was written")
+        return 0
+
+    write_path = merge_mod.write_root(root_path, result)
+    print()
+    print(f"  wrote {write_path} (previous kept as {write_path.name}.bak)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="autoweb",
@@ -455,6 +501,22 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("path", help="JSON of {lane: {T0_start: iso, ...}}")
     tr.set_defaults(func=_cmd_trace)
 
+    mg = sub.add_parser(
+        "merge",
+        help="fold lane state files back into root.json",
+        description="Three-way merge with root.json as the common ancestor. Deletions "
+                    "are never propagated, an empty IndexedDB never overwrites a real "
+                    "one, and a value two lanes changed differently evicts the origin "
+                    "rather than guessing which token is still valid.",
+    )
+    mg.add_argument("lanes", nargs="+", metavar="LANE_JSON",
+                    help="lane state files, e.g. lane-1.json lane-3.json")
+    mg.add_argument("--root", default=None, metavar="PATH",
+                    help="the ancestor to merge onto (default: state.root from config)")
+    mg.add_argument("--dry-run", action="store_true",
+                    help="print the decisions and write nothing")
+    mg.set_defaults(func=_cmd_merge)
+
     ln.set_defaults(func=lambda a: (ln.print_help(), 1)[1])
     return parser
 
@@ -487,7 +549,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return args.func(args)
-    except (ConfigError, StateError, LaneError, TraceError) as exc:
+    except (ConfigError, StateError, LaneError, TraceError, MergeError) as exc:
         # These are the user's problem to fix, so they get a clean message naming the
         # key or the file, not a traceback.
         print(f"error: {exc}", file=sys.stderr)
