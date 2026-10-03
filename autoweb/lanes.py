@@ -102,6 +102,14 @@ def mcp_args(cfg: Config, index: int = 1) -> list[str]:
     Windows: exit 0 with a handoff, or exit 21, with no error to catch. So each lane
     gets its own directory. `--storage-state` is documented as applying to isolated
     sessions, so a persistent lane is seeded by its profile rather than by the JSON.
+
+    `--caps=storage` is what makes a lane able to hand anything back. Without it the
+    server ships 25 tools and none of them can read a cookie: `filteredTools()` keeps a
+    tool only if its capability starts with `core` or is named in `--caps`, and all 17
+    storage tools declare `capability: "storage"`. Measured over stdio: 25 tools bare,
+    42 with the flag, the difference being exactly those 17. `--help` advertises only
+    `vision, pdf, devtools`, so this one is undocumented, and the pinned version is what
+    stops that from becoming a silent break.
     """
     args = [f"@playwright/mcp@{cfg.lanes.mcp_version}"]
     if cfg.lanes.isolated:
@@ -112,6 +120,9 @@ def mcp_args(cfg: Config, index: int = 1) -> list[str]:
     else:
         profile = cfg.root_dir / STATE_DIRNAME / "profiles" / f"{LANE_PREFIX}{index}"
         args += ["--user-data-dir", profile.resolve().as_posix()]
+    # Not conditional. A lane that cannot read its own cookies has nothing to hand back
+    # at teardown, which is the entire point of running one.
+    args += ["--caps=storage"]
     args += ["--browser", cfg.lanes.browser]
     return args
 

@@ -88,11 +88,22 @@ def load(path: Path) -> dict[str, Any]:
         raise StateError(
             f"{path}: expected a storageState object, got {type(raw).__name__}"
         )
+    # Both keys, present, not merely well-typed if they happen to exist. Playwright
+    # always writes both, even when empty, so a file missing one is not a storageState -
+    # and `raw.get(key, [])` used to let any JSON object through as "0 cookies, 0
+    # origins", which reads like a successful export of nothing. The same false-pass
+    # shape as a verify that asserted nothing.
+    missing = [key for key in ("cookies", "origins") if key not in raw]
+    if missing:
+        raise StateError(
+            f"{path}: not a Playwright storageState file - it has no "
+            f"{' and no '.join(repr(k) for k in missing)} key. "
+            f"Export one with 'autoweb state export <url>'."
+        )
     for key in ("cookies", "origins"):
-        value = raw.get(key, [])
-        if not isinstance(value, list):
+        if not isinstance(raw[key], list):
             raise StateError(
-                f"{path}: '{key}' must be a list, got {type(value).__name__}. "
+                f"{path}: '{key}' must be a list, got {type(raw[key]).__name__}. "
                 f"This does not look like a Playwright storageState file."
             )
     return raw

@@ -545,3 +545,19 @@ def test_a_lane_is_told_to_verify_its_own_page(tmp_path):
     body = lane_markdown(1, config_at(tmp_path))
     assert "location.href" in body
     assert "browser_wait_for" in body
+
+
+def test_every_lane_can_read_its_own_storage(tmp_path):
+    """Without `--caps=storage` the server ships 25 tools and not one of them can read
+    a cookie, so the lane has nothing to hand back at teardown. Measured over stdio:
+    25 tools bare, 42 with the flag."""
+    for body in ("", "[lanes]\nisolated = false\n"):
+        root = tmp_path / ("iso" if not body else "persistent")
+        root.mkdir()
+        assert "--caps=storage" in mcp_args(config_at(root, body))
+
+
+def test_the_storage_capability_reaches_the_generated_file(tmp_path):
+    """The frontmatter is what the server is actually started with."""
+    entry = frontmatter(lane_markdown(1, config_at(tmp_path)))["mcpServers"][0]
+    assert "--caps=storage" in entry[server_name(1)]["args"]

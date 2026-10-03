@@ -331,3 +331,22 @@ def test_seed_result_carries_body_text():
                         status=200, body_text="Welcome to the Secure Area.")
     haystack = (result.title + "\n" + result.body_text).lower()
     assert "secure area" in haystack
+
+
+def test_a_json_object_that_is_not_a_storage_state_is_rejected(tmp_path):
+    """`raw.get(key, [])` used to let any JSON object through, so an unrelated file was
+    reported as a successful export of "0 cookies, 0 origins". Playwright always writes
+    both keys, so a file missing either one is not a storageState."""
+    path = tmp_path / "root.json"
+    for body in ('{"hello": "world"}', '{"cookies": []}', '{"origins": []}', "{}"):
+        path.write_text(body, encoding="utf-8")
+        with pytest.raises(StateError, match="not a Playwright storageState"):
+            load(path)
+
+
+def test_an_empty_but_real_storage_state_is_accepted(tmp_path):
+    """A fresh profile with nothing in it is a legitimate export, and rejecting it would
+    make `state export` fail on the one case a user is most likely to hit first."""
+    path = tmp_path / "root.json"
+    path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+    assert load(path) == {"cookies": [], "origins": []}
