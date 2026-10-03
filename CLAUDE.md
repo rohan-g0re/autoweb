@@ -44,8 +44,13 @@ for the 2.x rename list and the child-env allowlist.
 
 These are load-bearing. Violating them is how this becomes another framework.
 
-1. **Don't wrap the LLM. Don't wrap its tools either.** Playwright MCP already
-   exposes 25 browser tools. Do not build a nicer API over them.
+1. **Don't wrap the LLM. Don't wrap its tools either.** How many browser tools you
+   get is a function of flags, not a fixed number. `@playwright/mcp@0.0.83` ships 83
+   tool definitions and `filteredTools()` keeps one only if its `capability` starts
+   with `core` or is named in `--caps`, then drops every `skillOnly` tool whatever you
+   pass. Zero flags, which is what this repo runs, yields 25; all eleven capabilities
+   yield 72. Check what you actually have before deciding the surface is too small,
+   and do not build a nicer API over it.
 2. **One bullet at a time.** `northstar.md` is ordered. Finish a line, prove it
    works, then move. No speculative scaffolding for line 6 while line 2 is unproven.
 3. **Markdown is the database.** Targets, resources, directions, goals, skills, run
@@ -66,12 +71,13 @@ These are load-bearing. Violating them is how this becomes another framework.
 | Engine | Claude Code |
 | Browser | `@playwright/mcp@0.0.83` over stdio, project-scoped `.mcp.json`, zero flags |
 | Language | Python (decided; TS only behind MCP or a CLI) |
-| Code | none yet, by design |
-| Done | northstar lines 1–3 — connected, acting, and acting from a goal alone |
+| Code | `autoweb/`: `config.py`, `state.py`, `lanes.py`, `cli.py`. 144 tests, ruff clean |
+| CLI | `autoweb config show/check`, `state export/inspect/verify`, `lanes sync/list` |
+| Done | northstar lines 1 to 4. Line 5 is built and unproven, line 6 is not built |
 
 `northstar.md` is the task list and the source of truth for sequencing.
 
-### What "lines 1–3 proven" means
+### What "proven" means here
 
 **Lines 1–2.** `navigate` → `snapshot` → `click` (by snapshot `ref`) → `snapshot` →
 `screenshot` → `close`, against `example.com` through to `iana.org`. Clean teardown, no
@@ -86,6 +92,25 @@ Doodle existed that day, and it reported that rather than passing off a plain-lo
 screenshot as one. It also found a real Typefully bug (bolding a selection over ~80
 characters drops a space at the cut point), reproduced it, and worked around it in the
 open.
+
+**Line 4.** `autoweb state export` opened a headed browser, a human logged in by hand,
+and `storageState({indexedDB: true})` wrote `root.json`. Everything was then killed, and
+a fresh `--isolated` browser seeded from that JSON alone was still inside the secure
+area, while a control run with no seed was redirected back to the login page. An
+independent tester ran both a gate and a re-gate. The gate found thirteen defects and
+the re-gate four, among them a `state verify` that exited 0 on a 404 and a `.tmp`/`.bak`
+pair that would have put live session cookies in a committable file in a public repo.
+All are fixed, and the fixes were verified by running them.
+
+**Line 5, not proven.** `autoweb lanes sync` generates the lane agent files and 44 tests
+assert the frontmatter that ships. The tests are offline: they prove the right text was
+written, not that five subagents get five browsers. A re-gate found real defects there,
+the fixes are in but not re-verified, and nothing has yet run three lanes on three sites
+at once, which is the actual test.
+
+The 144 tests are all offline. They cover config parsing, state file accounting and lane
+file generation; none of them opens a browser, and `cli.py` has no tests at all. Passing
+them is not evidence that a browser works.
 
 Note on scope: `playwright` is also defined at user scope on the author's machine with
 a `--user-data-dir`. Project scope wins here, and `claude mcp list` reports the
@@ -137,7 +162,15 @@ Load-bearing summary:
 - Parallelism requires `--isolated` (N sessions, N contexts) or N server processes.
 - On Windows, a second browser on the same profile fails **silently** — exit 0 with
   a handoff, or exit 21. There is no error to catch.
-- Background subagents lose MCP access. Browser work is foreground only.
+- A subagent that **inherits** the session's server shares its one browser and its one
+  current tab, so concurrent lanes there fight over the same page. A subagent whose
+  agent file declares an **inline** `mcpServers` block gets its own server process and
+  its own browser. Running in the background changes nothing: a background subagent
+  keeps its MCP tools. The earlier claim that it loses them is retracted.
+- Claude Code de-duplicates inline servers **by name** across subagents running at the
+  same time. Two agent files that both declare a server called `lane` collapse into one
+  process and one browser, which is the shared-tab failure by another route. Lane
+  servers are named per lane for that reason: `lane1`, `lane2`, and so on.
 
 ## Working in this repo
 
@@ -147,8 +180,7 @@ Load-bearing summary:
 - Windows paths in JSON: forward slashes. `\U` and `\A` break the parse.
 - Everything here is public. No tokens, no credentials, no machine-specific paths
   in anything tracked by git.
-- `CLAUDE.local.md` is the author's personal instructions and is gitignored. Do not
-  reference it from tracked files.
+- Personal instruction files are gitignored, and nothing tracked may reference them.
 
 ## Non-goals, explicitly
 

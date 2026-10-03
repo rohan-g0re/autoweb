@@ -39,16 +39,38 @@ class LaneError(Exception):
     """
 
 
-SERVER_NAME = "lane"
-"""Name of the inline MCP server inside a lane agent file.
+SERVER_NAME_PREFIX = "lane"
 
-Deliberately not `playwright`. The orchestrator's own `.mcp.json` already connects a
-server by that name, and which of two identically-named servers a subagent resolves
-is undocumented. A distinct name means there is nothing to resolve, and the lane's
-tools arrive as `mcp__lane__*`, which is also what `.claude/settings.json` allows.
-"""
+
+def server_name(index: int) -> str:
+    """Name of the inline MCP server inside lane *index*'s agent file.
+
+    **Every lane needs a different name.** Claude Code de-duplicates inline servers by
+    name across subagents running at the same time, so when two lane files both
+    declared a server called `lane` the second lane resolved to the first lane's
+    process: one server, one browser, one current tab. Lanes then navigated each
+    other's pages, and closing one lane's browser left the other with
+    `Error: No open pages available.` A per-lane name was measured to fix it - two
+    profile directories alive at once, each lane seeing only its own tabs.
+
+    Also deliberately not `playwright`: the orchestrator's own `.mcp.json` connects a
+    server by that name, and sharing it is the same failure by another route.
+
+    No hyphen. The name becomes part of a tool name (`mcp__lane1__browser_click`), and
+    `lane1` is the spelling that was actually verified end to end.
+    """
+    return f"{SERVER_NAME_PREFIX}{index}"
 
 AGENTS_DIRNAME = ".claude/agents"
+
+LOCAL_SETTINGS_PATH = ".claude/settings.local.json"
+"""Where generated lane permissions go.
+
+Not `settings.json`. That file is tracked, and these entries are a function of this
+machine's `lanes.max`, so committing them would make the repo depend on one person's
+config. `settings.local.json` is gitignored, which is also why a lane's absolute
+profile path is safe to imply here.
+"""
 LANE_PREFIX = "lane-"
 
 # Written into every generated file. `sync` will only ever delete a file carrying
@@ -97,20 +119,40 @@ def mcp_args(cfg: Config, index: int = 1) -> list[str]:
 def lane_markdown(index: int, cfg: Config) -> str:
     """Render one lane agent file.
 
+    Two things here are load-bearing and both were measured rather than reasoned.
+
     ``mcpServers`` is a **list** of single-key mappings, not a mapping. Claude Code
-    ignores a mapping here without logging anything, and the lane silently falls back
-    to the session's shared server, which is the one outcome this whole file exists
-    to prevent. The shape is load-bearing, so a test parses it rather than grepping
-    for the key.
+    ignores a mapping without logging anything, and the lane silently falls back to
+    the session's shared server.
+
+    The server's name is per-lane for the same reason: see `server_name`. Both
+    failures look identical from inside a lane - one browser, shared tabs - so a test
+    parses the frontmatter instead of grepping it.
+
+    What a lane is told about its identity depends on `isolated`. An isolated lane is
+    seeded from `root.json`; a persistent lane carries only its own profile and a fresh
+    one starts logged out. Saying otherwise sends it hunting for a session it does not
+    have.
     """
     args = ", ".join(json.dumps(a) for a in mcp_args(cfg, index))
+    server = server_name(index)
+    if cfg.lanes.isolated:
+        identity = "seeded from the shared root identity"
+        standing = ("You start logged in to whatever the shared identity "
+                    "in `root.json` holds.")
+    else:
+        identity = "carrying its own on-disk profile"
+        standing = ("You carry your own profile on disk rather than the "
+                    "shared identity, so you keep whatever you were logged "
+                    "in to last time, and a fresh profile starts logged "
+                    "out.")
     return f"""---
 name: {LANE_PREFIX}{index}
 description: Browser lane {index}. Use when work has been split across parallel \
-browser lanes and this lane number was assigned. Drives its own isolated browser, \
-seeded from the shared root identity.
+browser lanes and this lane number was assigned. Drives its own browser, \
+{identity}.
 mcpServers:
-  - {SERVER_NAME}:
+  - {server}:
       type: stdio
       command: npx
       args: [{args}]
@@ -121,7 +163,12 @@ mcpServers:
 # Lane {index}
 
 You own one browser. No other lane can see your tabs, your cookies or your storage,
-and you cannot see theirs. You start logged in to whatever the shared identity holds.
+and you cannot see theirs. {standing}
+
+**Use only your own `mcp__{server}__*` tools.** Tools named `mcp__playwright__*` may
+also be visible. Those are the orchestrator's one shared browser, and touching them
+puts you in the same tab as every other lane, which is what this lane exists to
+avoid.
 
 ## Work
 
@@ -129,7 +176,7 @@ Snapshot once, plan the whole sequence, execute it, verify once at the end. Ever
 browser call is a round trip through a model, so the cost of a task is the number of
 calls it makes rather than the number of steps it describes.
 
-Your browser tools may arrive deferred, named `mcp__{SERVER_NAME}__browser_*`. When
+Your browser tools may arrive deferred, named `mcp__{server}__browser_*`. When
 you cannot see them yet, load them with one `ToolSearch` call before your first
 browser call, and count that call in your budget.
 
@@ -213,6 +260,52 @@ def sync(cfg: Config, root: Path | None = None) -> list[LaneFile]:
         results.append(LaneFile(path, index, "removed"))
 
     return results
+
+
+def sync_permissions(cfg: Config, root: Path | None = None) -> list[str]:
+    """Grant each generated lane's server in `.claude/settings.local.json`.
+
+    A permission rule names one server, so `mcp__lane` does not cover `mcp__lane1`.
+    Without a rule per lane, a lane's first browser call stops for approval that
+    nobody is watching for, which reads as a hang.
+
+    Only rules this function owns - `mcp__lane<digits>` - are added or retired. Every
+    other key and rule in the file is left exactly as the user left it.
+    """
+    base = Path(root or cfg.root_dir)
+    path = base / LOCAL_SETTINGS_PATH
+    wanted = [f"mcp__{server_name(i)}" for i in range(1, cfg.lanes.max + 1)]
+
+    data: dict = {}
+    if path.exists():
+        try:
+            data = json.loads(_read(path) or "{}")
+        except json.JSONDecodeError as exc:
+            raise LaneError(f"{path}: not valid JSON, so lane permissions cannot be "
+                            f"granted: {exc}") from exc
+        if not isinstance(data, dict):
+            raise LaneError(f"{path}: expected a JSON object, got "
+                            f"{type(data).__name__}")
+
+    permissions = data.setdefault("permissions", {})
+    if not isinstance(permissions, dict):
+        raise LaneError(f"{path}: 'permissions' is not an object")
+    allow = permissions.setdefault("allow", [])
+    if not isinstance(allow, list):
+        raise LaneError(f"{path}: 'permissions.allow' is not a list")
+
+    ours = re.compile(rf"^mcp__{SERVER_NAME_PREFIX}[0-9]+$")
+    kept = [rule for rule in allow
+            if not (isinstance(rule, str) and ours.fullmatch(rule))
+            or rule in wanted]
+    for rule in wanted:
+        if rule not in kept:
+            kept.append(rule)
+    permissions["allow"] = kept
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write(path, json.dumps(data, indent=2) + "\n")
+    return wanted
 
 
 def existing(cfg: Config, root: Path | None = None) -> list[LaneFile]:

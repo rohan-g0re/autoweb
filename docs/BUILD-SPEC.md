@@ -18,14 +18,32 @@ Everything finalised, in one place. Decisions only — the reasoning lives in
                    later a model router / any harness. IT DOES NOT MATTER.
         - reads a skill .md -> decides how many lanes THIS task decomposes into
         - lane count is NEVER hardcoded. decided at runtime, from task complexity.
-        - spawns lanes by calling the CLI. that is the whole interface.
+        - `autoweb lanes sync` only WRITES the lane agent files, and grants each
+          lane's server in `.claude/settings.local.json`. it spawns nothing.
+        - a lane is spawned by delegating to the subagent named `lane-N`.
 
     LANE — a Claude Code subagent with its OWN inline MCP server.
-        `.claude/agents/lane-N.md` frontmatter:
+        `.claude/agents/lane-N.md` frontmatter, exact shape. the generator is
+        `lane_markdown` in `autoweb/lanes.py`:
             mcpServers:
-              playwright:
-                command: npx
-                args: ["@playwright/mcp@0.0.83", "--isolated", "--storage-state", "root.json"]
+              - lane1:
+                  type: stdio
+                  command: npx
+                  args: ["@playwright/mcp@0.0.83", "--isolated", "--storage-state", "<ABS>/root.json", "--browser", "chrome"]
+
+    - `mcpServers` is a LIST of single-key mappings. a mapping is ignored with nothing
+      logged, and the lane silently falls back to the session's shared browser.
+      measured twice.
+    - the server is named PER LANE (`lane1`, `lane2`, ...). Claude Code de-duplicates
+      inline servers by name across subagents running at the same time, so two lanes
+      both naming theirs `lane` collapsed into one process, one browser, one current
+      tab: lanes navigated each other's pages, and closing one left the other with
+      `Error: No open pages available.`
+    - not `playwright` either. the orchestrator's own `.mcp.json` connects a server by
+      that name, and sharing it is the same failure by another route.
+    - no hyphen. the name becomes part of a tool name, `mcp__lane1__browser_click`.
+    - `--storage-state` takes an ABSOLUTE path. a relative one resolves against the MCP
+      server's working directory, which the agent file cannot see.
 
     - docs, verbatim: "Inline servers defined here are connected when the subagent
       starts ... and disconnected when it finishes. String references share the parent
@@ -34,15 +52,17 @@ Everything finalised, in one place. Decisions only — the reasoning lives in
       a bare string reference = shares the parent's. inline is the whole trick.
     - inline also keeps the tool descriptions OUT of the orchestrator's context.
       the docs name this as the reason to prefer it over `.mcp.json`.
-    - background subagents KEEP every MCP tool. the "background loses MCP" note in
-      CLAUDE.local.md is stale and wrong.
+    - background subagents KEEP every MCP tool. an earlier note claiming they lose it
+      was measured wrong.
 
     LANE COUNT — dynamic within a ceiling
     - agent files must be PRE-AUTHORED. there is no documented way to create server
       instance #6 at runtime.
     - whether ONE definition invoked N times concurrently yields N connections or 1 is
       UNDOCUMENTED -> author distinct files, lane-1..lane-N.
-    - so: author a pool (10). orchestrator picks 1..10 per task at runtime.
+    - so: `autoweb lanes sync` generates `lanes.max` files. default 5, hard ceiling
+      `MAX_LANES = 50` (`autoweb/config.py`). orchestrator picks 1..max per task at
+      runtime.
     - subagent concurrency caps at 20 by default (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`).
     - truly unbounded/dynamic needs the Agent SDK. that is the later harness, not now.
 
@@ -79,7 +99,7 @@ Everything finalised, in one place. Decisions only — the reasoning lives in
 # Lane lifecycle
 
     SPAWN
-    - `playwright-mcp --isolated --storage-state root.json`
+    - `playwright-mcp --isolated --storage-state <ABS>/root.json --browser chrome`
     - `--isolated` = nothing written to disk, all in RAM -> no cache junk ever
     - `--isolated` and `--user-data-dir` are mutually exclusive. error, not a warning.
     - import restores IndexedDB correctly. only EXPORT has to leave MCP.
@@ -99,10 +119,16 @@ Everything finalised, in one place. Decisions only — the reasoning lives in
         - the trace -> feeds the skill .md
     - 3. close in order: `context.close()` does NOT release the lock. `browser.close()` does.
     - 4. deregister. lane-N.json is now immutable input to the merge.
+    - GAP, not yet handled: the harvest cannot run through MCP as the lane argv stands.
+      every storage tool (`browser_storage_state`, `browser_set_storage_state`,
+      `browser_cookie_*`, `browser_localstorage_*`, `browser_sessionstorage_*`) declares
+      `capability: "storage"`, and `filteredTools()` ships only a tool whose capability
+      starts with `core` or appears in `--caps`. the lane argv passes no
+      `--caps=storage`, so in a lane those tools do not exist at all.
 
 # Merge
 
-    see rohan_questions.md — steps 1-5 stand as written.
+    ONE pass, after every lane is dead. the rules:
     - ancestor is always available: root.json is immutable for the whole run.
     - never propagate deletions.
     - conflict -> evict the origin, force re-login. never pick a winner.
@@ -130,5 +156,9 @@ Everything finalised, in one place. Decisions only — the reasoning lives in
 
 # Still open
 
-- which site line 4 is tested against (not gmail — google blocks automation and you end
-  up debugging their bot defences instead of our export).
+- line 4 was proven against a public test site, with a control run showing an unseeded
+  browser is bounced to `/login`. still owed: one run against a site with MFA and
+  IndexedDB-backed auth, which the test site does not have. not gmail, google blocks
+  automation and you end up debugging their bot defences instead of our export.
+- whether teardown harvests through MCP (`--caps=storage`, cookies and localStorage
+  only) or over CDP with python owning the context (adds IndexedDB). see TEARDOWN.

@@ -8,7 +8,8 @@ independent browsers and five subagents fighting over one tab.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import pathlib
+import re
 
 import pytest
 import yaml
@@ -17,11 +18,15 @@ from autoweb.config import Config
 from autoweb.lanes import (
     AGENTS_DIRNAME,
     GENERATED_MARKER,
-    SERVER_NAME,
+    LOCAL_SETTINGS_PATH,
+    SERVER_NAME_PREFIX,
+    LaneError,
     existing,
     lane_markdown,
     mcp_args,
+    server_name,
     sync,
+    sync_permissions,
 )
 
 
@@ -66,29 +71,82 @@ def test_inline_server_round_trips_to_the_exact_argv(tmp_path):
     """What YAML parsing yields must equal what mcp_args() produced."""
     cfg = config_at(tmp_path)
     entry = frontmatter(lane_markdown(1, cfg))["mcpServers"][0]
-    assert list(entry) == [SERVER_NAME]
-    server = entry[SERVER_NAME]
+    assert list(entry) == [server_name(1)]
+    server = entry[server_name(1)]
     assert server["command"] == "npx"
     assert server["type"] == "stdio"
     assert server["args"] == mcp_args(cfg)
 
 
 def test_lane_server_is_not_called_playwright(tmp_path):
-    """The orchestrator's own .mcp.json already connects a server named
-    `playwright`. Which of two identically-named servers a subagent resolves is
-    undocumented, so lanes use a distinct name and there is nothing to resolve.
-
-    `.claude/settings.json` must allow that name, or every browser call prompts.
-    """
+    """The orchestrator's own .mcp.json already connects a server named `playwright`,
+    and sharing it puts every lane in one browser."""
     entry = frontmatter(lane_markdown(1, config_at(tmp_path)))["mcpServers"][0]
-    assert SERVER_NAME != "playwright"
-    assert list(entry) == [SERVER_NAME]
+    assert SERVER_NAME_PREFIX != "playwright"
+    assert list(entry) == [server_name(1)]
 
-    settings = json.loads(
-        (Path(__file__).parent.parent / ".claude/settings.json").read_text())
-    allowed = settings["permissions"]["allow"]
-    assert any(rule == f"mcp__{SERVER_NAME}" or rule.startswith(f"mcp__{SERVER_NAME}__")
-               for rule in allowed), f"settings.json does not allow mcp__{SERVER_NAME}"
+
+def test_every_lane_declares_a_DIFFERENT_server_name(tmp_path):
+    """The defect this phase exists to prevent, in its second form.
+
+    Claude Code de-duplicates inline servers by name across subagents running at the
+    same time. When every lane file declared a server called `lane`, lane 2 resolved
+    to lane 1's process: one browser, one current tab, lanes navigating each other's
+    pages, and `Error: No open pages available.` when the first lane closed. Measured,
+    then measured again with per-lane names to confirm the fix.
+    """
+    cfg = config_at(tmp_path, "[lanes]\nmax = 5\n")
+    names = [next(iter(frontmatter(lane_markdown(i, cfg))["mcpServers"][0]))
+             for i in range(1, 6)]
+    assert len(set(names)) == 5, names
+
+
+def test_a_lane_server_name_is_safe_inside_a_tool_name(tmp_path):
+    """The name becomes `mcp__<name>__browser_click`. `lane1` is the spelling that was
+    verified end to end, so keep it to letters and digits."""
+    for index in (1, 10, 50):
+        assert re.fullmatch(r"[A-Za-z0-9]+", server_name(index)), server_name(index)
+
+
+def test_sync_grants_every_lane_server_in_local_settings(tmp_path):
+    """A permission rule names one server, so `mcp__lane` does not cover `mcp__lane1`.
+    An ungranted lane stops for approval nobody is watching for, which reads as a
+    hang."""
+    cfg = config_at(tmp_path, "[lanes]\nmax = 3\n")
+    granted = sync_permissions(cfg)
+    data = json.loads((tmp_path / LOCAL_SETTINGS_PATH).read_text(encoding="utf-8"))
+    allow = data["permissions"]["allow"]
+    assert granted == ["mcp__lane1", "mcp__lane2", "mcp__lane3"]
+    for rule in granted:
+        assert rule in allow
+
+
+def test_granting_permissions_keeps_what_the_user_already_had(tmp_path):
+    """settings.local.json is the user's file. Only `mcp__lane<digits>` is ours."""
+    cfg = config_at(tmp_path, "[lanes]\nmax = 1\n")
+    path = tmp_path / LOCAL_SETTINGS_PATH
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "permissions": {"allow": ["Bash(ls)", "mcp__lane9"], "deny": ["Bash(rm)"]},
+        "model": "opus",
+    }), encoding="utf-8")
+    sync_permissions(cfg)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["model"] == "opus"
+    assert data["permissions"]["deny"] == ["Bash(rm)"]
+    assert "Bash(ls)" in data["permissions"]["allow"]
+    assert "mcp__lane1" in data["permissions"]["allow"]
+    # lane 9 is above the ceiling now, and it is a rule this function owns.
+    assert "mcp__lane9" not in data["permissions"]["allow"]
+
+
+def test_malformed_local_settings_is_a_clear_error_not_a_traceback(tmp_path):
+    cfg = config_at(tmp_path)
+    path = tmp_path / LOCAL_SETTINGS_PATH
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(LaneError, match="not valid JSON"):
+        sync_permissions(cfg)
 
 
 def test_isolated_and_user_data_dir_are_never_both_passed(tmp_path):
@@ -108,7 +166,7 @@ def test_paths_with_spaces_and_unicode_survive_yaml(tmp_path, path_fragment):
     (nested / "autoweb.toml").write_text("", encoding="utf-8")
     cfg = Config.load(nested)
     entry = frontmatter(lane_markdown(1, cfg))["mcpServers"][0]
-    assert entry[SERVER_NAME]["args"] == mcp_args(cfg)
+    assert entry[server_name(1)]["args"] == mcp_args(cfg)
 
 
 def test_every_lane_gets_its_own_file(tmp_path):
@@ -347,6 +405,29 @@ def test_the_generated_file_carries_this_lanes_own_profile(tmp_path):
     cfg = _persistent(tmp_path, 2)
     seen = set()
     for index in (1, 2):
-        args = frontmatter(lane_markdown(index, cfg))["mcpServers"][0][SERVER_NAME]["args"]
+        entry = frontmatter(lane_markdown(index, cfg))["mcpServers"][0]
+        args = entry[server_name(index)]["args"]
         seen.add(args[args.index("--user-data-dir") + 1])
     assert len(seen) == 2, seen
+
+
+def test_the_lane_profile_path_is_absolute(tmp_path):
+    """The MCP server resolves a relative path against its own working directory,
+    which the agent file cannot see, so two lanes could land on one profile.
+
+    Absoluteness is the property that matters, and it is all this asserts. Dropping the
+    `.resolve()` in `mcp_args` leaves this passing, because `Config.load` already gives
+    an absolute `root_dir` - the call is defensive, not load-bearing, and a test that
+    pretended otherwise would be testing the implementation.
+    """
+    cfg = config_at(tmp_path, "[lanes]\nisolated = false\n")
+    args = mcp_args(cfg, 1)
+    assert pathlib.Path(args[args.index("--user-data-dir") + 1]).is_absolute()
+
+
+def test_a_lane_is_told_not_to_use_the_orchestrators_browser(tmp_path):
+    """`mcp__playwright__*` is visible inside a lane. Using it lands the lane in the
+    one shared tab, which is the failure this phase exists to prevent."""
+    body = lane_markdown(1, config_at(tmp_path))
+    assert "mcp__playwright__*" in body
+    assert "mcp__lane1__" in body

@@ -2,8 +2,11 @@
 
 **A stub for web automation. Not a framework.**
 
-> Status: pre-alpha. Nothing works yet. This README describes what is being built
-> and how it is sequenced — see [`northstar.md`](northstar.md) for the live task list.
+> Status: pre-alpha. There is an installable Python package and a working CLI, and
+> northstar lines 1 to 4 are proven: a browser connects, acts, acts from a goal alone,
+> and a login done by hand survives into a fresh browser seeded only from exported
+> JSON. Line 5, parallel browser lanes, is built but not yet proven. See
+> [`northstar.md`](northstar.md) for the live task list.
 
 ---
 
@@ -83,19 +86,62 @@ and compose per problem.
 
 ## Install
 
-Not yet. There is nothing to install.
+Python 3.10 or newer and [uv](https://docs.astral.sh/uv/). Node 20 or newer too, since
+`@playwright/mcp` is an npm package and Claude Code is a Node process. Clone this repo,
+then:
+
+```sh
+uv sync
+uv run playwright install chromium
+uv run autoweb --version
+```
+
+`uv sync` is enough for the config and lane commands. The `playwright install` step is
+only needed by `autoweb state`, which is the one part that drives a browser itself.
+
+## The CLI
+
+Seven commands. Every one of them prints its own help.
+
+```sh
+autoweb config show              # effective config, defaults included
+autoweb config check             # validate autoweb.toml, non-zero exit if malformed
+
+autoweb state export URL         # headed browser, you log in, the session is saved
+autoweb state inspect [PATH]     # origins, cookies, IndexedDB, bytes
+autoweb state verify URL [PATH]  # seed a fresh browser from the JSON, report what it sees
+
+autoweb lanes sync               # write .claude/agents/lane-N.md, one per lane
+autoweb lanes list               # show the lane files that exist
+```
+
+Settings live in [`autoweb.toml`](autoweb.toml), every key has a working default, and
+each one is documented where it is defined in `autoweb/config.py` rather than in a
+reference that rots. `-C DIR` runs as if started elsewhere; config is searched upward
+from there.
+
+`state verify` is an assertion rather than a tool. It takes `--expect-url` and
+`--expect-text` and exits non-zero when they do not hold, so a session that did not
+survive the round trip is a failing command instead of a paragraph to read.
+
+`lanes sync` writes one agent file per lane, each declaring its own inline MCP server.
+That is what gives a lane its own browser rather than a share of the session's one.
+The files are generated and gitignored because they embed an absolute path to your
+`root.json`; the generator is what is committed.
+
+The loop is still Claude Code. Nothing here drives a browser on your behalf.
 
 ## Roadmap
 
 Strictly ordered. Each line gets finished and proven before the next one starts.
 See [`northstar.md`](northstar.md).
 
-1. Connect Playwright MCP, self-contained in this repo
-2. Prove a browser opens and takes actions
-3. Act from a URL + a goal
-4. Browser profile persistence
-5. Parallel profile spawns
-6. Profile merge-back
+1. Connect Playwright MCP, self-contained in this repo. Proven.
+2. Prove a browser opens and takes actions. Proven.
+3. Act from a URL + a goal. Proven.
+4. Browser profile persistence. Proven, as `autoweb state`.
+5. Parallel profile spawns. Built as `autoweb lanes`, not yet proven.
+6. Profile merge-back.
 7. `SIMULATION`: build / run / assert / revise
 
 ## Non-goals

@@ -1,8 +1,14 @@
 - [x] connect playwright mcp
 - [x] test if it can make open browser && take actions
 - [x] can it take action based on the url and "goal" as given
-- browser profile saving
-- browser profile parallel spawns
+- [x] browser profile saving. `autoweb state export|inspect|verify`. Gate and re-gate
+  both passed under an independent tester: logged in by hand, exported, killed
+  everything, and a fresh browser seeded only from the JSON was still in the secure
+  area, while an unseeded control run was redirected back to the login page.
+- browser profile parallel spawns. Built, not proven. `autoweb lanes sync` generates
+  one agent file per lane, each declaring its own inline MCP server so it gets its own
+  server process, its own browser and its own current tab. The re-gate's findings are
+  fixed but not re-verified, and no run has yet put three lanes on three sites at once.
 - browser profile "merge profile" after each parallel spawns ends (so that profile always stays updated)
 
 

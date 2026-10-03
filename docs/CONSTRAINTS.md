@@ -13,6 +13,14 @@ Source has moved **out** of `microsoft/playwright-mcp` into the Playwright monor
 is generated and is stale in places (profile dir name, `--port` help, the
 capabilities enum). Read the monorepo source, not the README.
 
+The npm package is a shim. The shipped logic is bundled into
+`playwright-core/lib/coreBundle.js`, so to read what your pinned version actually does,
+locate that file in the resolved `playwright-core`: the npx/npm cache entry for the
+pinned `@playwright/mcp`, or `playwright/driver/package/lib/coreBundle.js` under any
+local Playwright install. Claims below marked **source** were read there; claims marked
+**live** were observed in a running session. Both are evidence. They are not the same
+strength, and keeping them apart is this file's job.
+
 ## 2. Tool surface
 
 25 tools are always on:
@@ -42,6 +50,18 @@ Behind `--caps`:
 `--caps` is a bare comma list with **no enum validation** — a typo is silently
 ignored. `tracing` is shimmed to `devtools`.
 
+**The gate has no default, so storage is off unless you ask for it** (source).
+`filteredTools(config)` keeps a tool only when
+`tool.capability.startsWith("core") || config.capabilities?.includes(tool.capability)`,
+and `config.capabilities` is taken straight from `--caps`. 17 tools declare
+`capability: "storage"`: `browser_storage_state`, `browser_set_storage_state`,
+`browser_cookie_*`, `browser_localstorage_*`, `browser_sessionstorage_*`. **None of them
+exist in a server started without `--caps=storage`**, and that includes this repo's
+flagless `.mcp.json`. `--help` advertises only `vision, pdf, devtools` for `--caps`, so
+`storage` is undocumented but accepted. That last point is read from the option
+definition and the filter, and has **not** been confirmed against a live tool listing
+from a server started with `--caps=storage`.
+
 Gone: `browser_install` (now `cli.js install-browser`), `--save-trace`,
 `--save-video` (removed ~0.0.60 — use `--caps=devtools`). `--save-session` still
 exists.
@@ -68,6 +88,13 @@ Defaults in MCP mode: **persistent profile**, **headed**, `channel=chrome`.
 Headless only on Linux without `DISPLAY`. Every flag has a `PLAYWRIGHT_MCP_*` env
 twin.
 
+`--storage-state` is documented as *"path to the storage state file for isolated
+sessions"* (source: the option definition). What a persistent-mode server does when
+handed one anyway has not been measured, so AutoWeb does not pass it there and seeds
+persistent lanes from their own `--user-data-dir` instead. The neighbouring *library*
+fact is measured and is not the same fact: `launchPersistentContext({ storageState })`
+launches, reports success, and restores nothing (`docs/STORAGE-EXPORT.md`).
+
 Default profile dir, from code:
 `%LOCALAPPDATA%\ms-playwright-mcp\mcp-{channel}-{sha256(cwd)[:7]}`. The hash is of
 the **client workspace root**, not the session — so a different cwd silently gets a
@@ -85,7 +112,7 @@ Parallelism has exactly two shapes:
 | mode                         | result                                                                                  |
 | ---------------------------- | --------------------------------------------------------------------------------------- |
 | `--isolated`               | one browser process,**one context per MCP session**. The supported parallel mode. |
-| N server processes           | N browsers. Collides on port (`EADDRINUSE` — use `--port 0`) and on profile dir.   |
+| N server processes           | N browsers, N contexts. Over **stdio** there is no port, so nothing can collide there; the only shared resource is the profile directory, so each process needs `--isolated` or its own `--user-data-dir`. `EADDRINUSE` is an HTTP-transport problem only (`--port 0`). |
 | `--shared-browser-context` | all clients share ONE context. Tabs bleed across clients.`browser_close` is refused.  |
 
 **Default persistent mode breaks with ≥2 clients.** Second client fails its first
@@ -105,6 +132,32 @@ tool. What is true is that a subagent *inheriting* the session's server shares
 its single browser and current tab. A subagent whose agent file declares an
 **inline** `mcpServers` list gets its own server process, and those run in
 parallel safely. The shape matters: a mapping is ignored silently.
+
+### Lanes: one subagent, one browser
+
+AutoWeb's lanes are the N-stdio-processes shape. `.claude/agents/lane-N.md` declares an
+inline `mcpServers` block, so each lane gets its own server process, browser, context
+and current tab. Three things about that, all **live**:
+
+- **Claude Code de-duplicates inline servers by name across concurrently-running
+  subagents.** Two lane files that each declared a server named `lane` collapsed into
+  **one** server process and one browser: lanes listed each other's tabs, one lane
+  navigated the other's current tab, and closing the first browser left the second with
+  `Error: No open pages available.` A process poller saw at most one
+  `playwright_chromiumdev_profile-*` user-data-dir alive at a time, and only +2
+  `node.exe` over baseline. The control run, identical except that one lane's server was
+  renamed, gave two profile dirs alive concurrently, 16 to 17 chrome processes, +4 node,
+  and each lane seeing only its own tabs. Hence a distinct name per lane (`lane1`,
+  `lane2`, ...) and tools named `mcp__lane1__browser_*`. A permission rule names one
+  server, so `mcp__lane` does not cover `mcp__lane1`; each lane needs its own rule or
+  its first browser call stops for an approval nobody is watching for.
+- **A lane also sees the orchestrator's `mcp__playwright__*` tools.** They are not
+  hidden and cannot be revoked, and a lane that calls one lands in the single shared
+  browser alongside every other lane. The generated lane file says so in as many words,
+  which is the whole defence.
+- **Inside a subagent, MCP tools arrive deferred**: the names are visible, the schemas
+  are not. One `ToolSearch` call before the first browser call is enough, verified
+  across four lane executions. Budget it as a call.
 
 ## 5. Windows profile locking — fails silently
 
@@ -156,6 +209,18 @@ and autofill.
 
 Known bug: `indexedDB: true` silently empties `Map` and `Set` values
 ([playwright#42703](https://github.com/microsoft/playwright/issues/42703)).
+
+**The lossy direction is export only, confirmed at both call sites (source).**
+`browser_storage_state` calls `browserContext.storageState()` bare, and the
+implementation signature is
+`storageState(progress, { indexedDB = false, opfs = false, credentials = false } = {})`,
+so an in-band export drops IndexedDB, OPFS and WebAuthn credentials, and the tool
+exposes no way to ask for them. Import is the opposite: `setStorageState` unregisters
+service workers, calls `deleteDatabase` on every database it finds, then recreates each
+one object store by object store with its `keyPath`, `autoIncrement` and indexes, and
+clears localStorage before restoring it. So `browser_set_storage_state` and
+`--storage-state` seed a lane faithfully; only the export step has to leave MCP
+(`docs/STORAGE-EXPORT.md`).
 
 `launchPersistentContext` has **no** `storageState` option.
 

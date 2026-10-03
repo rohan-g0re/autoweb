@@ -12,9 +12,10 @@ deferred**, not abandoned; the code stays POSIX-clean so it ports later.
 
 ## Phase 0 — environment and corrections
 
-- [x] `~/.claude/CLAUDE.md` and `CLAUDE.local.md`: replace the two wrong browser rules
+- [x] Personal instruction files corrected: replace the two wrong browser rules
       (background subagents keep MCP; one-worker-at-a-time applies only to *shared*
-      servers), drop the `ddpat` profile path.
+      servers) and drop a hardcoded browser-profile path belonging to one machine.
+      Those files are gitignored, so they are not named here.
 - [x] Windows toolchain verified: node 24.11.1, npm 11.6.2, python 3.11.9, uv 0.11.7,
       git 2.52, `playwright` (python) present, Chrome installed, chromium-1243 cached.
       `mcp` not installed — not needed until the Agent SDK phase.
@@ -40,6 +41,12 @@ deferred**, not abandoned; the code stays POSIX-clean so it ports later.
 
 ## Phase 1 — repo skeleton and config
 
+**Status: passed, commits `610854d` and `8ae3d31`.** The first gate returned 14 defects.
+The load-bearing one: TOML is typed and dataclasses are not, so `Klass(**data)` accepted
+any value matching a key name. `indexeddb = "false"` is a truthy string, so a user
+turning IndexedDB off silently got it on while `config check` reported `ok`. Fixed with
+an explicit per-field type spec.
+
 - `pyproject.toml` (uv), `autoweb/`, `tests/`, `docs/`.
   Flat package at root, not `src/`: both Python comparables (hermes-agent,
   browser-use) do this, and a stub people fork should import without an
@@ -49,10 +56,16 @@ deferred**, not abandoned; the code stays POSIX-clean so it ports later.
   max IndexedDB stores/origin), per-origin `indexeddb` / `rotates` / `sticky`.
 - Every option documented where it is defined, not in a separate reference that rots.
 
-**Test:** `autoweb --help` runs; a malformed `autoweb.toml` fails loudly with a message
-naming the offending key.
+**Test:** done. `autoweb --help` runs and a malformed `autoweb.toml` names the
+offending key.
 
 ## Phase 2 — root.json (northstar line 4)
+
+**Status: passed, commits `a1f3f36`, `9a7a7b3`, `d46c4dc`.** Two gates. The first found
+`root.json.bak` and `root.json.tmp` were not gitignored, which in a public repo means a
+committable live session cookie, and that `verify` asserted nothing: it printed the
+title and exited 0, while the test site serves the same title on its login and secure
+pages.
 
 The smallest honest unit, and it needs none of the lane machinery.
 
@@ -61,19 +74,44 @@ The smallest honest unit, and it needs none of the lane machinery.
 - `autoweb state inspect` — origin count, bytes, which origins carry cookies vs
   IndexedDB. Needed before you can tune caps honestly.
 
-**Test (Fable):** log into one site by hand, export, kill everything, start a fresh
-`--isolated` browser seeded from the JSON, assert still logged in. Site TBD — not
-Gmail; Google blocks automation and you end up debugging their bot defences.
+**Test (Fable):** done. Logged into one site by hand, exported, killed everything,
+started a fresh `--isolated` browser seeded from the JSON, still in the secure area. A
+control run confirmed an unseeded browser is redirected to `/login`, which is what makes
+the first result mean anything. Not Gmail: Google blocks automation and you end up
+debugging their bot defences instead of the export.
+
+Still owed: a second run against a site with MFA and IndexedDB-backed auth. The public
+test site has neither.
 
 ## Phase 3 — lanes (northstar line 5)
 
+**Status: built, two gates failed, fixes in. Not green until a third gate passes.**
+Both failures were the same shape, and both were invisible to a passing test suite:
+
+- Gate 1: `mcpServers` was emitted as a YAML **mapping**. Claude Code wants a list and
+  ignores a mapping silently, so lanes fell back to the session's shared server. 121
+  tests passed while the feature was dead, because the test grepped for `"mcpServers:"`
+  instead of parsing the YAML.
+- Gate 2: every lane named its inline server `lane`. Claude Code de-duplicates inline
+  servers **by name** across concurrently-running subagents, so all lanes collapsed into
+  one process and one tab. Hence `lane1`, `lane2`, and a test that the names differ.
+
+The lesson both times: assert the parsed artifact, and prove isolation by counting
+browsers rather than by reading the file that was supposed to cause it.
+
 - `.claude/agents/lane-1.md` … `lane-N.md`, each with an **inline** `mcpServers`
-  block, `--isolated --storage-state root.json --browser chromium`.
+  block as a **list** of single-key mappings, a **per-lane** server name, and
+  `--isolated --storage-state <abs>/root.json --browser chrome`.
+- `autoweb lanes sync` also grants `mcp__laneN` in the gitignored
+  `.claude/settings.local.json`. A permission rule names one server, so `mcp__lane`
+  does not cover `mcp__lane1`, and an ungranted lane stalls on approval nobody sees.
 - A skill doc telling the orchestrator how to decide lane count from task shape, and
   how to dispatch. Lane count is never hardcoded; the file pool is the ceiling.
 
-**Test (Fable):** spawn 3 lanes concurrently on 3 different sites; assert 3 distinct
-browser processes, no shared current tab, all 3 logged in from the same root.
+**Test (Fable):** spawn lanes concurrently on different sites; assert distinct browser
+processes, no shared current tab, and each logged in from the same root. Counting
+processes is the assertion that matters: both failures above looked correct in the
+generated file.
 
 ## Phase 4 — teardown and harvest
 
@@ -82,6 +120,20 @@ The window between "kill it" and killing it.
 - settle → harvest (`storageState({indexedDB:true})` → `lane-N.json`, top-level
   origins visited, cookies changed vs root, trace) → `context.close()` then
   `browser.close()` → deregister.
+
+**Known blocker, read from the vendor source before building.** Every storage tool
+declares `capability: "storage"`, and `filteredTools()` ships a tool only if its
+capability starts with `core` or is named in `--caps`. The lane argv passes no `--caps`,
+so a lane today cannot save or restore anything. Worse, `browser_storage_state` calls
+`storageState()` bare, so even with `--caps=storage` it captures no IndexedDB, which is
+where most real login state lives. Import is the complete direction:
+`setStorageState` deletes and recreates every database.
+
+So Phase 4 has to decide between harvesting cookies and localStorage only through MCP,
+or putting Python in charge of the context over CDP so it can ask for IndexedDB. An
+un-harvested origin must be recorded as un-harvested: merging an empty `indexedDB: []`
+over a good root entry is indistinguishable from a deletion, and Phase 5 must never
+propagate deletions.
 
 **Test (Fable):** a lane that navigates to 3 sites yields a `lane-N.json` plus a
 navigation list containing exactly those 3 origins and none of the third-party ones.

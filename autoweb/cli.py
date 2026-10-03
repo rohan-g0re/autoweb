@@ -228,7 +228,13 @@ def _cmd_lanes_sync(args: argparse.Namespace) -> int:
         print(f"{len([r for r in results if r.action != 'removed'])} lanes in "
               f"{cfg.root_dir / lanes.AGENTS_DIRNAME}")
 
-    if not cfg.root_state_path.is_file():
+    granted = lanes.sync_permissions(cfg)
+    print(f"  granted {len(granted)} lane servers in {lanes.LOCAL_SETTINGS_PATH} "
+          f"({granted[0]} .. {granted[-1]})")
+
+    # Only isolated lanes are seeded from the file, so only they break without it.
+    # A persistent lane never sees root.json and would be fine.
+    if cfg.lanes.isolated and not cfg.root_state_path.is_file():
         # The files themselves are correct, so this is a warning rather than an error.
         # But be accurate about the consequence: a lane does not start logged out, it
         # fails every browser call until the file exists.
@@ -236,6 +242,13 @@ def _cmd_lanes_sync(args: argparse.Namespace) -> int:
         print(f"  warning: {cfg.root_state_path.name} does not exist, so every browser")
         print("           call in a lane will fail with ENOENT until it does.")
         print("           Create it with: autoweb state export <url>")
+    if not cfg.lanes.isolated:
+        print()
+        print("  note: lanes.isolated is off, so each lane keeps its own profile under")
+        print(f"        {lanes.STATE_DIRNAME}/profiles and is not seeded from "
+              f"{cfg.root_state_path.name}.")
+        print("        A fresh profile starts logged out. Parallel work wants "
+              "isolated = true.")
     return 0
 
 
