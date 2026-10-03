@@ -11,7 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, state
+from . import __version__, lanes, state
 from .config import Config, ConfigError, Learned
 from .state import StateError
 
@@ -201,6 +201,52 @@ def _cmd_state_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_lanes_sync(args: argparse.Namespace) -> int:
+    """Regenerate the lane agent files from config."""
+    cfg = Config.load(args.dir)
+
+    if args.dry_run:
+        print(f"would write {cfg.lanes.max} lane agent files to "
+              f"{cfg.root_dir / lanes.AGENTS_DIRNAME}")
+        print(f"  npx {' '.join(lanes.mcp_args(cfg))}")
+        return 0
+
+    results = lanes.sync(cfg)
+    changed = [r for r in results if r.action != "unchanged"]
+    for result in changed:
+        print(f"  {result.action:<10} {result.path.name}")
+    if not changed:
+        print(f"{cfg.lanes.max} lane agent files already up to date")
+    else:
+        print(f"{len([r for r in results if r.action != 'removed'])} lanes in "
+              f"{cfg.root_dir / lanes.AGENTS_DIRNAME}")
+
+    if not cfg.root_state_path.is_file():
+        # Not an error: the files are still correct, and a lane only needs the state
+        # when it launches a browser.
+        print()
+        print(f"  note: {cfg.root_state_path.name} does not exist yet, so lanes will "
+              f"start logged out.")
+        print("        create it with: autoweb state export <url>")
+    return 0
+
+
+def _cmd_lanes_list(args: argparse.Namespace) -> int:
+    """Show which lane agent files exist and whether they are generated."""
+    cfg = Config.load(args.dir)
+    found = lanes.existing(cfg)
+    if not found:
+        print(f"no lane agent files in {cfg.root_dir / lanes.AGENTS_DIRNAME}")
+        print("  create them with: autoweb lanes sync")
+        return 0
+
+    print(f"{len(found)} lane agent files in {cfg.root_dir / lanes.AGENTS_DIRNAME} "
+          f"(ceiling is lanes.max = {cfg.lanes.max})")
+    for lane in found:
+        print(f"  {lane.path.name:<14} {lane.action}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="autoweb",
@@ -268,6 +314,27 @@ def build_parser() -> argparse.ArgumentParser:
     verify.set_defaults(func=_cmd_state_verify)
 
     st.set_defaults(func=lambda a: (st.print_help(), 1)[1])
+
+    ln = sub.add_parser(
+        "lanes", help="generate and inspect the parallel browser lanes")
+    ln_sub = ln.add_subparsers(dest="subcommand", metavar="<subcommand>")
+
+    lsync = ln_sub.add_parser(
+        "sync",
+        help="write lane agent files from config",
+        description="Generates .claude/agents/lane-N.md, one per lane up to "
+                    "lanes.max. Each gets an inline MCP server, which is what gives "
+                    "it its own browser instead of sharing the session's.",
+    )
+    lsync.add_argument("--dry-run", action="store_true",
+                       help="print what would be written and exit")
+    lsync.set_defaults(func=_cmd_lanes_sync)
+
+    llist = ln_sub.add_parser(
+        "list", help="show existing lane agent files")
+    llist.set_defaults(func=_cmd_lanes_list)
+
+    ln.set_defaults(func=lambda a: (ln.print_help(), 1)[1])
     return parser
 
 
