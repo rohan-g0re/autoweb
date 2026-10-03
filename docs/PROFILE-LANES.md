@@ -26,6 +26,8 @@ Your actual profile, measured: **~810 MB, of which 97% is disposable cache** —
 
 **Microsoft already answered your question, in the playwright-mcp README:** *"A persistent profile can only be used by one browser instance at a time… To run several clients in parallel, start each additional client with `--isolated` or point it at a distinct `--user-data-dir`."* Those are the only two lane designs that exist.
 
+AutoWeb takes the first design and keeps the second honest. `isolated = true` is the default and the only mode that is seeded from `root.json`. Set `isolated = false` and `autoweb lanes sync` stops passing `--storage-state` — the flag is for isolated sessions and persistent mode accepts it and throws it away, which would leave a lane looking seeded and logged out — and hands each lane its own directory under `.autoweb/profiles/lane-N` instead. That mode is for watching one lane across restarts. It is not the parallel path.
+
 **State flows out of a profile but not back in.** `launchPersistentContext()` has no `storageState` option at all — you can *export* with `.storageState()` from a persistent context, but you can only *import* into an isolated one. That asymmetry is why `--storage-state` pairs with `--isolated`, and it quietly decides your architecture.
 
 **A three-way merge needs a common ancestor.** Git finds a merge base; Unison keeps an archive of the last agreed state — without a recorded base you cannot distinguish "changed" from "always differed," and Unison degrades to marking everything as conflicting.

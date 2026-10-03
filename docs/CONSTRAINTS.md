@@ -99,7 +99,12 @@ A Playwright maintainer on this: *"works fine with single client, but falls apar
 when you have 2 or more… We should have made one of the two options required for
 http transport."* ([playwright-mcp#1631](https://github.com/microsoft/playwright-mcp/issues/1631))
 
-Also: **background subagents lose MCP access.** Browser work is foreground only.
+**Correction (2026-10-03):** an earlier note here said background subagents lose
+MCP access. They do not: the docs state a background subagent keeps every MCP
+tool. What is true is that a subagent *inheriting* the session's server shares
+its single browser and current tab. A subagent whose agent file declares an
+**inline** `mcpServers` list gets its own server process, and those run in
+parallel safely. The shape matters: a mapping is ignored silently.
 
 ## 5. Windows profile locking — fails silently
 

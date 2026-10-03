@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import __version__, lanes, state
 from .config import Config, ConfigError, Learned
+from .lanes import LaneError
 from .state import StateError
 
 
@@ -215,6 +216,12 @@ def _cmd_lanes_sync(args: argparse.Namespace) -> int:
     changed = [r for r in results if r.action != "unchanged"]
     for result in changed:
         print(f"  {result.action:<10} {result.path.name}")
+    skipped = [r for r in results if r.action == "skipped"]
+    if skipped:
+        print()
+        for result in skipped:
+            print(f"  {result.path.name} was written by hand, so it was left alone. "
+                  f"Delete it to let sync manage that lane.")
     if not changed:
         print(f"{cfg.lanes.max} lane agent files already up to date")
     else:
@@ -222,12 +229,13 @@ def _cmd_lanes_sync(args: argparse.Namespace) -> int:
               f"{cfg.root_dir / lanes.AGENTS_DIRNAME}")
 
     if not cfg.root_state_path.is_file():
-        # Not an error: the files are still correct, and a lane only needs the state
-        # when it launches a browser.
+        # The files themselves are correct, so this is a warning rather than an error.
+        # But be accurate about the consequence: a lane does not start logged out, it
+        # fails every browser call until the file exists.
         print()
-        print(f"  note: {cfg.root_state_path.name} does not exist yet, so lanes will "
-              f"start logged out.")
-        print("        create it with: autoweb state export <url>")
+        print(f"  warning: {cfg.root_state_path.name} does not exist, so every browser")
+        print("           call in a lane will fail with ENOENT until it does.")
+        print("           Create it with: autoweb state export <url>")
     return 0
 
 
@@ -366,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return args.func(args)
-    except (ConfigError, StateError) as exc:
+    except (ConfigError, StateError, LaneError) as exc:
         # These are the user's problem to fix, so they get a clean message naming the
         # key or the file, not a traceback.
         print(f"error: {exc}", file=sys.stderr)

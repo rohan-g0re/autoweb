@@ -25,6 +25,7 @@ TOML was wrong is a bug in this module.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -72,10 +73,15 @@ class LaneConfig:
     """Which browser channel lanes launch.
 
     ``chrome`` is playwright-mcp's own default and uses real Google Chrome.
-    ``chromium`` uses Playwright's bundled build.
+    ``chromium`` means Chrome for Testing, which Playwright downloads.
 
-    Set this to ``chromium`` on ARM Linux: Google ships no Chrome for that platform,
-    so the default fails at the first browser call rather than at startup.
+    Set this to ``chromium`` on ARM Linux, where Google ships no Chrome. Install the
+    build playwright-mcp expects with::
+
+        npx @playwright/mcp@<version> install-browser chrome-for-testing
+
+    not ``npx playwright install chromium``: that installs a different revision, and
+    the mismatch surfaces at the first browser call rather than at startup.
     """
 
     mcp_version: str = "0.0.83"
@@ -92,8 +98,13 @@ class LaneConfig:
     accumulates. Also what makes lanes safe to run in parallel: they share no profile
     directory, so there is no lock to contend over.
 
-    Turning this off means every lane needs its own ``--user-data-dir``, and you
-    inherit the whole profile-locking problem in ``docs/CONSTRAINTS.md``.
+    Turning this off puts every lane on disk instead, and ``autoweb lanes sync`` then
+    gives each one its own ``--user-data-dir`` under ``.autoweb/profiles/``, because a
+    second browser on a profile already in use fails *silently* on Windows. The cost is
+    that ``--storage-state`` applies to isolated sessions only, so a persistent lane is
+    **not** seeded from ``root.json``: it carries whatever its own profile already
+    holds, and a fresh one starts logged out. Off is for debugging a single lane you
+    want to watch across restarts, not for parallel work.
     """
 
 
@@ -211,6 +222,14 @@ _FIELD_TYPES: dict[type, dict[str, tuple[type, bool]]] = {
 
 _TYPE_NAMES = {bool: "a boolean", int: "an integer", str: "a string"}
 _BROWSERS = ("chrome", "chromium", "msedge", "firefox", "webkit")
+
+MAX_LANES = 50
+"""Hard ceiling on ``lanes.max``.
+
+Not a performance guess. Claude Code runs at most 20 subagents concurrently by
+default, and every lane is a browser worth roughly 2 GB, so a four-digit value is
+always a typo rather than an intention.
+"""
 
 
 def _check_type(value: Any, expected: type, optional: bool, where: str) -> None:
@@ -411,6 +430,20 @@ def _validate(lanes: LaneConfig, state: StateConfig, caps: CapsConfig,
         )
     if not lanes.mcp_version.strip():
         raise ConfigError(f"{path}: 'lanes.mcp_version' cannot be empty")
+    # This value is interpolated into the argv inside a generated agent file, so an
+    # unconstrained string could inject extra arguments - '--user-data-dir' among
+    # them, which conflicts with '--isolated' and fails at startup.
+    if not re.fullmatch(r"[A-Za-z0-9._@+-]+", lanes.mcp_version):
+        raise ConfigError(
+            f"{path}: 'lanes.mcp_version' may contain only letters, digits and "
+            f". _ @ + - characters, got '{lanes.mcp_version}'"
+        )
+    if lanes.max > MAX_LANES:
+        raise ConfigError(
+            f"{path}: 'lanes.max' is {lanes.max}, above the {MAX_LANES} this "
+            f"generates files for. Claude Code runs at most 20 subagents "
+            f"concurrently by default, and each lane is a whole browser."
+        )
     if not state.root.strip():
         raise ConfigError(f"{path}: 'state.root' cannot be empty")
 

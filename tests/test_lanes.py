@@ -7,12 +7,17 @@ independent browsers and five subagents fighting over one tab.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
+import yaml
 
 from autoweb.config import Config
 from autoweb.lanes import (
     AGENTS_DIRNAME,
     GENERATED_MARKER,
+    SERVER_NAME,
     existing,
     lane_markdown,
     mcp_args,
@@ -28,13 +33,82 @@ def config_at(tmp_path, body: str = "") -> Config:
 # --- the isolation property -------------------------------------------------
 
 
-def test_server_is_defined_inline_not_referenced(tmp_path):
-    """An inline definition starts a fresh server; a string reference shares the
-    parent's, which would put every lane on one browser and one current tab."""
-    body = lane_markdown(1, config_at(tmp_path))
-    assert "mcpServers:" in body
-    assert "command: npx" in body
-    assert "args: [" in body
+def frontmatter(body: str) -> dict:
+    """Parse the YAML frontmatter the way Claude Code will."""
+    marker = "---\n"
+    assert body.startswith(marker)
+    return yaml.safe_load(body.split(marker, 2)[1])
+
+
+def test_frontmatter_is_valid_yaml(tmp_path):
+    fm = frontmatter(lane_markdown(1, config_at(tmp_path)))
+    assert fm["name"] == "lane-1"
+    assert isinstance(fm["description"], str) and fm["description"]
+
+
+def test_mcp_servers_is_a_list_not_a_mapping(tmp_path):
+    """THE load-bearing assertion, and the one an earlier grep-based test missed.
+
+    Claude Code documents `mcpServers` as a sequence of single-key mappings. Given a
+    mapping it logs nothing and silently ignores the block, so the lane falls back to
+    the session's shared server: one browser, one current tab, every lane fighting
+    over it. That is the exact failure lanes exist to prevent, and a test that greps
+    for "mcpServers:" passes while it happens.
+    """
+    fm = frontmatter(lane_markdown(1, config_at(tmp_path)))
+    assert isinstance(fm["mcpServers"], list), (
+        "mcpServers must be a list of single-key mappings; a mapping is ignored "
+        "silently and the lane shares the parent's browser"
+    )
+
+
+def test_inline_server_round_trips_to_the_exact_argv(tmp_path):
+    """What YAML parsing yields must equal what mcp_args() produced."""
+    cfg = config_at(tmp_path)
+    entry = frontmatter(lane_markdown(1, cfg))["mcpServers"][0]
+    assert list(entry) == [SERVER_NAME]
+    server = entry[SERVER_NAME]
+    assert server["command"] == "npx"
+    assert server["type"] == "stdio"
+    assert server["args"] == mcp_args(cfg)
+
+
+def test_lane_server_is_not_called_playwright(tmp_path):
+    """The orchestrator's own .mcp.json already connects a server named
+    `playwright`. Which of two identically-named servers a subagent resolves is
+    undocumented, so lanes use a distinct name and there is nothing to resolve.
+
+    `.claude/settings.json` must allow that name, or every browser call prompts.
+    """
+    entry = frontmatter(lane_markdown(1, config_at(tmp_path)))["mcpServers"][0]
+    assert SERVER_NAME != "playwright"
+    assert list(entry) == [SERVER_NAME]
+
+    settings = json.loads(
+        (Path(__file__).parent.parent / ".claude/settings.json").read_text())
+    allowed = settings["permissions"]["allow"]
+    assert any(rule == f"mcp__{SERVER_NAME}" or rule.startswith(f"mcp__{SERVER_NAME}__")
+               for rule in allowed), f"settings.json does not allow mcp__{SERVER_NAME}"
+
+
+def test_isolated_and_user_data_dir_are_never_both_passed(tmp_path):
+    """Playwright-mcp refuses that combination at startup, not at first use."""
+    for name, body in (("iso", ""), ("persistent", "[lanes]\nisolated = false\n")):
+        root = tmp_path / name
+        root.mkdir()
+        args = mcp_args(config_at(root, body))
+        assert not ("--isolated" in args and "--user-data-dir" in args)
+
+
+@pytest.mark.parametrize("path_fragment", ["with space", "unicode_éü"])
+def test_paths_with_spaces_and_unicode_survive_yaml(tmp_path, path_fragment):
+    """A path that breaks YAML quoting would seed the lane with nothing."""
+    nested = tmp_path / path_fragment
+    nested.mkdir()
+    (nested / "autoweb.toml").write_text("", encoding="utf-8")
+    cfg = Config.load(nested)
+    entry = frontmatter(lane_markdown(1, cfg))["mcpServers"][0]
+    assert entry[SERVER_NAME]["args"] == mcp_args(cfg)
 
 
 def test_every_lane_gets_its_own_file(tmp_path):
@@ -169,3 +243,110 @@ def test_files_that_only_look_like_lanes_are_ignored(tmp_path, name):
     sync(cfg)
     (tmp_path / AGENTS_DIRNAME / name).write_text("x\n", encoding="utf-8")
     assert [lane.path.name for lane in existing(cfg)] == ["lane-1.md"]
+
+
+def test_mcp_version_cannot_inject_extra_arguments(tmp_path):
+    """mcp_version is interpolated into a YAML argv, so an unconstrained string
+    could smuggle in `--user-data-dir`, which conflicts with `--isolated` and makes
+    the server fail at startup."""
+    from autoweb.config import ConfigError
+
+    (tmp_path / "autoweb.toml").write_text(
+        '[lanes]\nmcp_version = \'0.0.83", "--user-data-dir", "C:/x\'\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="mcp_version"):
+        Config.load(tmp_path)
+
+
+def test_lane_ceiling_is_enforced(tmp_path):
+    """A four-digit lanes.max is a typo, not an intention."""
+    from autoweb.config import ConfigError
+
+    (tmp_path / "autoweb.toml").write_text("[lanes]\nmax = 1000000\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="lanes.max"):
+        Config.load(tmp_path)
+
+
+def test_hand_written_lane_inside_the_ceiling_is_not_overwritten(tmp_path):
+    """Raising lanes.max is not permission to destroy an agent somebody wrote.
+
+    The marker guarded only the removal loop, so a marker-less lane-3.md inside
+    1..max was silently replaced and reported as "updated".
+    """
+    cfg = config_at(tmp_path, "[lanes]\nmax = 5\n")
+    agents = tmp_path / AGENTS_DIRNAME
+    agents.mkdir(parents=True)
+    mine = agents / "lane-3.md"
+    original = "---\nname: lane-3\n---\nmy own agent\n"
+    mine.write_text(original, encoding="utf-8")
+
+    results = sync(cfg)
+    assert mine.read_text() == original
+    assert [r.action for r in results if r.index == 3] == ["skipped"]
+
+
+def test_leading_zero_names_are_not_lanes(tmp_path):
+    """lane-01.md would otherwise claim index 1 alongside lane-1.md, so one of them
+    could never be retired."""
+    cfg = config_at(tmp_path, "[lanes]\nmax = 1\n")
+    sync(cfg)
+    (tmp_path / AGENTS_DIRNAME / "lane-01.md").write_text("x\n", encoding="utf-8")
+    assert [lane.path.name for lane in existing(cfg)] == ["lane-1.md"]
+
+
+def test_unreadable_lane_file_is_left_alone(tmp_path):
+    """A directory where a lane file should be must not crash sync, and must not be
+    mistaken for a generated file and deleted."""
+    cfg = config_at(tmp_path, "[lanes]\nmax = 1\n")
+    agents = tmp_path / AGENTS_DIRNAME
+    agents.mkdir(parents=True)
+    (agents / "lane-4.md").mkdir()
+
+    sync(cfg)
+    assert (agents / "lane-4.md").is_dir()
+
+
+def test_agents_path_blocked_by_a_file_is_a_clean_error(tmp_path):
+    from autoweb.lanes import LaneError
+
+    cfg = config_at(tmp_path, "[lanes]\nmax = 1\n")
+    (tmp_path / ".claude").write_text("not a directory", encoding="utf-8")
+    with pytest.raises(LaneError, match="is a file, not a directory"):
+        sync(cfg)
+
+
+# --- the persistent-mode escape hatch ---------------------------------------
+
+
+def _persistent(tmp_path, max_lanes=1):
+    return config_at(tmp_path, f"[lanes]\nisolated = false\nmax = {max_lanes}\n")
+
+
+def test_persistent_lanes_get_one_profile_directory_each(tmp_path):
+    """Without --isolated every lane would share the one default profile directory,
+    and a second Chromium on a profile already in use fails silently on Windows."""
+    cfg = _persistent(tmp_path, 3)
+    dirs = [mcp_args(cfg, i)[mcp_args(cfg, i).index("--user-data-dir") + 1]
+            for i in (1, 2, 3)]
+    assert len(set(dirs)) == 3, dirs
+
+
+def test_persistent_lanes_do_not_pass_storage_state(tmp_path):
+    """--storage-state applies to isolated sessions. In persistent mode it is accepted
+    and silently discarded, so the lane would look seeded without being seeded."""
+    assert "--storage-state" not in mcp_args(_persistent(tmp_path))
+
+
+def test_isolated_lanes_do_not_pass_user_data_dir(tmp_path):
+    """The two flags are mutually exclusive; the server refuses both at startup."""
+    assert "--user-data-dir" not in mcp_args(config_at(tmp_path))
+
+
+def test_the_generated_file_carries_this_lanes_own_profile(tmp_path):
+    """The frontmatter is what ships. A call site that dropped the index would hand
+    every lane lane-1's directory and the silent lock comes back."""
+    cfg = _persistent(tmp_path, 2)
+    seen = set()
+    for index in (1, 2):
+        args = frontmatter(lane_markdown(index, cfg))["mcpServers"][0][SERVER_NAME]["args"]
+        seen.add(args[args.index("--user-data-dir") + 1])
+    assert len(seen) == 2, seen

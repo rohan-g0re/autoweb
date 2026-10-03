@@ -35,8 +35,9 @@ the server is entitled to revoke the whole family, which logs out every lane at 
 including the identity they all came from.
 
 Give such a site to **one** lane and route the rest elsewhere. Sites known to behave
-this way are listed under `[origins]` in `autoweb.toml` with `rotates = true`, and the
-loop adds to that list when it catches one.
+this way carry `rotates = true`: set by hand under `[origins]` in `autoweb.toml`, or
+recorded by the loop in `.autoweb/learned.json` when it catches one mid-run.
+`autoweb config show` prints both.
 
 When in doubt about a site that holds money or credentials, one lane.
 

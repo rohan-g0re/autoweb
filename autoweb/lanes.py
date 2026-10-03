@@ -23,11 +23,30 @@ and the orchestrator picks how many of them to use per task.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import Config
+from .config import STATE_DIRNAME, Config
+
+
+class LaneError(Exception):
+    """Raised when lane files cannot be written or read.
+
+    Filesystem states like a read-only file or a directory where a file belongs are
+    the user's to fix, so they get one line and exit 2 rather than a traceback.
+    """
+
+
+SERVER_NAME = "lane"
+"""Name of the inline MCP server inside a lane agent file.
+
+Deliberately not `playwright`. The orchestrator's own `.mcp.json` already connects a
+server by that name, and which of two identically-named servers a subagent resolves
+is undocumented. A distinct name means there is nothing to resolve, and the lane's
+tools arrive as `mcp__lane__*`, which is also what `.claude/settings.json` allows.
+"""
 
 AGENTS_DIRNAME = ".claude/agents"
 LANE_PREFIX = "lane-"
@@ -46,8 +65,8 @@ class LaneFile:
     action: str        # "created", "updated", "unchanged", "removed"
 
 
-def mcp_args(cfg: Config) -> list[str]:
-    """The `playwright-mcp` argv a lane launches with.
+def mcp_args(cfg: Config, index: int = 1) -> list[str]:
+    """The `playwright-mcp` argv lane *index* launches with.
 
     `--isolated` keeps the profile in memory. Nothing is written to disk, so no cache
     accumulates and no two lanes contend over a profile directory lock.
@@ -55,31 +74,46 @@ def mcp_args(cfg: Config) -> list[str]:
     `--storage-state` seeds the lane from the shared base identity. Import restores
     IndexedDB correctly, which is why lanes can be driven entirely through MCP and
     only the export has to leave it.
+
+    With `isolated = false` every lane would otherwise share one default profile
+    directory, and a second Chromium on a profile already in use fails *silently* on
+    Windows: exit 0 with a handoff, or exit 21, with no error to catch. So each lane
+    gets its own directory. `--storage-state` is documented as applying to isolated
+    sessions, so a persistent lane is seeded by its profile rather than by the JSON.
     """
     args = [f"@playwright/mcp@{cfg.lanes.mcp_version}"]
     if cfg.lanes.isolated:
         args.append("--isolated")
-    # A relative path here would resolve against the MCP server's working directory,
-    # which is not something the agent file can see. Absolute removes the question.
-    args += ["--storage-state", cfg.root_state_path.as_posix()]
+        # A relative path here would resolve against the MCP server's working
+        # directory, which the agent file cannot see. Absolute removes the question.
+        args += ["--storage-state", cfg.root_state_path.as_posix()]
+    else:
+        profile = cfg.root_dir / STATE_DIRNAME / "profiles" / f"{LANE_PREFIX}{index}"
+        args += ["--user-data-dir", profile.resolve().as_posix()]
     args += ["--browser", cfg.lanes.browser]
     return args
 
 
 def lane_markdown(index: int, cfg: Config) -> str:
-    """Render one lane agent file."""
-    args = ",\n              ".join(f'"{a}"' for a in mcp_args(cfg))
+    """Render one lane agent file.
+
+    ``mcpServers`` is a **list** of single-key mappings, not a mapping. Claude Code
+    ignores a mapping here without logging anything, and the lane silently falls back
+    to the session's shared server, which is the one outcome this whole file exists
+    to prevent. The shape is load-bearing, so a test parses it rather than grepping
+    for the key.
+    """
+    args = ", ".join(json.dumps(a) for a in mcp_args(cfg, index))
     return f"""---
 name: {LANE_PREFIX}{index}
 description: Browser lane {index}. Use when work has been split across parallel \
 browser lanes and this lane number was assigned. Drives its own isolated browser, \
 seeded from the shared root identity.
 mcpServers:
-  playwright:
-    command: npx
-    args: [
-              {args}
-          ]
+  - {SERVER_NAME}:
+      type: stdio
+      command: npx
+      args: [{args}]
 ---
 
 {GENERATED_MARKER}
@@ -94,6 +128,10 @@ and you cannot see theirs. You start logged in to whatever the shared identity h
 Snapshot once, plan the whole sequence, execute it, verify once at the end. Every
 browser call is a round trip through a model, so the cost of a task is the number of
 calls it makes rather than the number of steps it describes.
+
+Your browser tools may arrive deferred, named `mcp__{SERVER_NAME}__browser_*`. When
+you cannot see them yet, load them with one `ToolSearch` call before your first
+browser call, and count that call in your budget.
 
 Read `browser_snapshot` output to find elements. It returns the accessibility tree
 with a `ref` for each node, and `browser_click` and `browser_type` take those refs.
@@ -126,7 +164,18 @@ def sync(cfg: Config, root: Path | None = None) -> list[LaneFile]:
     """
     base = Path(root or cfg.root_dir)
     agents = base / AGENTS_DIRNAME
-    agents.mkdir(parents=True, exist_ok=True)
+    for ancestor in [agents, *agents.parents]:
+        if ancestor.exists():
+            if not ancestor.is_dir():
+                raise LaneError(
+                    f"{agents}: cannot write here - '{ancestor}' is a file, not a "
+                    f"directory"
+                )
+            break
+    try:
+        agents.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise LaneError(f"{agents}: cannot create: {exc}") from exc
 
     results: list[LaneFile] = []
     wanted = range(1, cfg.lanes.max + 1)
@@ -134,23 +183,33 @@ def sync(cfg: Config, root: Path | None = None) -> list[LaneFile]:
     for index in wanted:
         path = agents / f"{LANE_PREFIX}{index}.md"
         body = lane_markdown(index, cfg)
-        if not path.exists():
-            action = "created"
-        elif path.read_text(encoding="utf-8") == body:
-            results.append(LaneFile(path, index, "unchanged"))
-            continue
-        else:
+        if path.exists():
+            current = _read(path)
+            if current == body:
+                results.append(LaneFile(path, index, "unchanged"))
+                continue
+            # Raising lanes.max is not permission to destroy an agent somebody
+            # wrote. Only files this command produced are overwritten, and the
+            # marker is the only evidence of that.
+            if GENERATED_MARKER not in current:
+                results.append(LaneFile(path, index, "skipped"))
+                continue
             action = "updated"
-        path.write_text(body, encoding="utf-8")
+        else:
+            action = "created"
+        _write(path, body)
         results.append(LaneFile(path, index, action))
 
     for path in sorted(agents.glob(f"{LANE_PREFIX}*.md")):
         index = _index_of(path)
         if index is None or index in wanted:
             continue
-        if GENERATED_MARKER not in path.read_text(encoding="utf-8"):
+        if GENERATED_MARKER not in _read(path):
             continue        # somebody else's file that happens to match the name
-        path.unlink()
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise LaneError(f"{path}: cannot remove: {exc}") from exc
         results.append(LaneFile(path, index, "removed"))
 
     return results
@@ -162,17 +221,39 @@ def existing(cfg: Config, root: Path | None = None) -> list[LaneFile]:
     if not agents.is_dir():
         return []
     found: list[LaneFile] = []
-    for path in sorted(agents.glob(f"{LANE_PREFIX}*.md"), key=lambda p: _sort_key(p)):
+    for path in sorted(agents.glob(f"{LANE_PREFIX}*.md"), key=_sort_key):
         index = _index_of(path)
         if index is None:
             continue
-        generated = GENERATED_MARKER in path.read_text(encoding="utf-8")
+        generated = GENERATED_MARKER in _read(path)
         found.append(LaneFile(path, index, "generated" if generated else "hand-written"))
     return found
 
 
+def _read(path: Path) -> str:
+    """Read a lane file, treating anything unreadable as 'not ours to touch'."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # A directory, a binary file, or one we cannot open. Returning empty means it
+        # carries no marker, so sync leaves it alone - the safe answer either way.
+        return ""
+
+
+def _write(path: Path, body: str) -> None:
+    try:
+        path.write_text(body, encoding="utf-8")
+    except OSError as exc:
+        raise LaneError(f"{path}: cannot write: {exc}") from exc
+
+
 def _index_of(path: Path) -> int | None:
-    match = re.fullmatch(rf"{LANE_PREFIX}(\d+)", path.stem)
+    """Lane number from a filename, or None if this is not a generated lane name.
+
+    Leading zeros are rejected: `lane-01.md` would otherwise claim index 1 alongside
+    `lane-1.md`, so one of them could never be retired.
+    """
+    match = re.fullmatch(rf"{LANE_PREFIX}([1-9]\d*)", path.stem)
     return int(match.group(1)) if match else None
 
 
