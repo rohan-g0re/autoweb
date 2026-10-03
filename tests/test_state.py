@@ -284,3 +284,50 @@ def test_export_without_a_terminal_explains_itself(tmp_path, monkeypatch):
     with pytest.raises(StateError, match="interactive terminal"):
         export_interactive(tmp_path / "root.json", "https://example.com",
                            wait_for_enter=eof)
+
+
+# --- regressions from the Phase 2 re-gate -----------------------------------
+
+
+def test_unwritable_destination_is_caught_before_the_browser_opens(tmp_path):
+    """A login that cannot be saved is a login the human has to do again.
+
+    Previously `export --out` whose parent was a file raised FileExistsError from
+    `save()` *after* the human had logged in, losing the session.
+    """
+    from autoweb.state import ensure_writable
+
+    blocker = tmp_path / "afile"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(StateError, match="is a file, not a directory"):
+        ensure_writable(blocker / "root.json")
+
+
+def test_ensure_writable_accepts_a_path_needing_new_directories(tmp_path):
+    from autoweb.state import ensure_writable
+
+    ensure_writable(tmp_path / "a" / "b" / "root.json")
+    assert (tmp_path / "a" / "b").is_dir()
+
+
+def test_ensure_writable_rejects_a_directory_in_the_files_place(tmp_path):
+    from autoweb.state import ensure_writable
+
+    target = tmp_path / "root.json"
+    target.mkdir()
+    with pytest.raises(StateError, match="not a file"):
+        ensure_writable(target)
+
+
+def test_seed_result_carries_body_text():
+    """`--expect-text` matched the title only, so a genuinely logged-in page failed.
+
+    The test site serves the title 'The Internet' on both its login page and its
+    secure area; only the body says which one you are on.
+    """
+    from autoweb.state import SeedResult
+
+    result = SeedResult(title="The Internet", final_url="https://x/secure",
+                        status=200, body_text="Welcome to the Secure Area.")
+    haystack = (result.title + "\n" + result.body_text).lower()
+    assert "secure area" in haystack

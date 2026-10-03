@@ -176,9 +176,16 @@ def _cmd_state_verify(args: argparse.Namespace) -> int:
     failures = []
     if args.expect_url and args.expect_url not in result.final_url:
         failures.append(f"expected the URL to contain {args.expect_url!r}")
-    # Checked against the title only; a body check would need the page kept open.
-    if args.expect_text and args.expect_text.lower() not in result.title.lower():
-        failures.append(f"expected the title to contain {args.expect_text!r}")
+    # Matched against the title and the visible text, because a title is a weak
+    # signal and many sites serve one across login and secure pages alike.
+    if args.expect_text:
+        haystack = (result.title + "\n" + result.body_text).lower()
+        if args.expect_text.lower() not in haystack:
+            failures.append(f"expected the page to contain {args.expect_text!r}")
+    # A non-2xx is a failure even when the URL did not change: "OK" on a 404 with an
+    # empty title is a false pass, and this command is meant to be a gate.
+    if result.status is not None and not 200 <= result.status < 300:
+        failures.append(f"the page returned HTTP {result.status}")
     # With no explicit assertion, fall back to the one signal that is almost always
     # right: a site that bounced you somewhere else logged you out.
     if (not args.expect_url and not args.expect_text
@@ -257,7 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--expect-url", default=None, metavar="SUBSTRING",
                         help="fail unless the final URL contains this")
     verify.add_argument("--expect-text", default=None, metavar="SUBSTRING",
-                        help="fail unless the page title contains this")
+                        help="fail unless the page title or visible text contains this")
     verify.set_defaults(func=_cmd_state_verify)
 
     st.set_defaults(func=lambda a: (st.print_help(), 1)[1])

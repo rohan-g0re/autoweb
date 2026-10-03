@@ -98,6 +98,30 @@ def load(path: Path) -> dict[str, Any]:
     return raw
 
 
+def ensure_writable(path: Path) -> None:
+    """Check *path* can be written to, before anything expensive happens.
+
+    Called before the browser opens. A human spends minutes logging in, possibly
+    through MFA, and discovering only afterwards that the output directory is a file
+    means that session is gone and they do it again. Find out first.
+    """
+    parent = path.parent
+    for ancestor in [parent, *parent.parents]:
+        if ancestor.exists():
+            if not ancestor.is_dir():
+                raise StateError(
+                    f"{path}: cannot write here - '{ancestor}' is a file, not a "
+                    f"directory"
+                )
+            break
+    if path.exists() and not path.is_file():
+        raise StateError(f"{path}: exists and is not a file")
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise StateError(f"{path}: cannot create {parent}: {exc}") from exc
+
+
 def save(path: Path, state: dict[str, Any]) -> None:
     """Write a state file atomically, keeping the previous version as ``.bak``.
 
@@ -105,9 +129,9 @@ def save(path: Path, state: dict[str, Any]) -> None:
     passwords. A half-written ``root.json`` would mean doing that again, so the write
     goes to a temp file and renames, and the file it replaces is kept.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
         if path.is_file():
             backup = path.with_suffix(path.suffix + ".bak")
@@ -115,7 +139,10 @@ def save(path: Path, state: dict[str, Any]) -> None:
             path.replace(backup)
         tmp.replace(path)
     except OSError as exc:
-        tmp.unlink(missing_ok=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass    # cleanup is best-effort; the original error is what matters
         raise StateError(f"{path}: cannot write state: {exc}") from exc
 
 
@@ -215,6 +242,10 @@ def export_interactive(
     your day-to-day profile would lock it, and on Windows a second Chrome on the same
     profile fails silently (exit 0 or 21, no error) - see ``docs/CONSTRAINTS.md``.
     """
+    # Before the browser opens, not after: a login that cannot be saved is a login
+    # the human has to do again.
+    ensure_writable(out)
+
     pw_api = _playwright()
     with pw_api() as pw:
         instance = _launch(pw, browser, headless=False)
@@ -256,6 +287,13 @@ class SeedResult:
     title: str
     final_url: str
     status: int | None
+    body_text: str = ""
+    """Visible text of the page.
+
+    A title is a weak signal: plenty of sites serve one title across their login
+    page and their secure area. The words on the page are what a human would read
+    to decide whether they are logged in.
+    """
 
 
 def seeded_context_check(state_path: Path, url: str, *, browser: str = "chrome",
@@ -278,10 +316,15 @@ def seeded_context_check(state_path: Path, url: str, *, browser: str = "chrome",
         context = instance.new_context(storage_state=str(state_path))
         page = context.new_page()
         response = _goto(page, url, timeout_seconds)
+        try:
+            body_text = page.inner_text("body")
+        except Exception:  # noqa: BLE001 - a page with no body is not an error here
+            body_text = ""
         result = SeedResult(
             title=page.title(),
             final_url=page.url,
             status=response.status if response is not None else None,
+            body_text=body_text,
         )
         context.close()
         instance.close()
@@ -322,8 +365,7 @@ def _launch(pw, browser: str, *, headless: bool):
         hint = (
             "Install it with: uv run playwright install chromium"
             if browser == "chromium"
-            else f"If {browser} is not installed, set lanes.browser = \"chromium\" in "
-                 f"autoweb.toml and run: uv run playwright install chromium"
+            else f"Install it with: uv run playwright install {browser}"
         )
         raise StateError(f"could not launch '{browser}': {first_line}\n  {hint}") from exc
 
