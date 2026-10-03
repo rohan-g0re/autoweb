@@ -27,6 +27,12 @@ dependencies = [
 [project.optional-dependencies]
 # Only needed once lanes move out of Claude Code and into their own processes.
 sdk = ["claude-agent-sdk>=0.2", "mcp>=1.6.0"]
+# Deliberately the same list as the `dev` dependency-group below, and that duplication
+# is the point: `uv sync` installs groups and ignores extras, while pip cannot install a
+# PEP 735 group at all without a recent version and an explicit --group. Listing the dev
+# tools in both tables is what lets `uv sync` and `pip install -e ".[dev]"` each work on
+# their own, so a clone is not hostage to one installer being present.
+dev = ["pytest>=8.0", "ruff>=0.6", "pyyaml>=6.0.3"]
 
 [project.scripts]
 autoweb = "autoweb.cli:main"
@@ -50,11 +56,11 @@ target-version = "py310"
 testpaths = ["tests"]
 
 [dependency-groups]
-# A dependency *group*, not an optional-dependency *extra*. `uv sync` installs groups
-# by default and extras only when asked, so the same name in the wrong table means a
-# fresh clone gets no test runner: `uv run pytest` then falls back to whatever pytest
-# is on PATH, which cannot import `autoweb` and fails with ModuleNotFoundError that
-# looks like a packaging bug rather than a missing dev dependency. Verified by cloning.
+# `uv sync` installs groups by default and extras only when asked. With the dev tools in
+# the extra alone, a fresh clone got no test runner and `uv run pytest` fell back to
+# whatever pytest was on PATH, which cannot import `autoweb` and fails with a
+# ModuleNotFoundError that reads like a packaging bug. Verified by cloning into a temp
+# directory. Kept in sync with the `dev` extra above on purpose; see the note there.
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",

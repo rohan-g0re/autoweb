@@ -56,10 +56,24 @@ found 14, phase 2's found 13 across two rounds, phase 3 took three gates.
 ```sh
 git clone https://github.com/rohan-g0re/autoweb.git && cd autoweb
 uv sync                       # installs the dev group: pytest, ruff, pyyaml
-uv run pytest -q              # 184 pass, offline, a couple of seconds
+uv run pytest -q              # offline, a couple of seconds
 uv run ruff check .
 npx playwright install chromium
 ```
+
+**Without uv**, which is the case on a machine where installing it is somebody else's
+decision. The dev tools are declared as both a dependency group and an extra for exactly
+this reason, so pip can set up the same environment:
+
+```sh
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+pytest -q && ruff check .
+python -m playwright install chromium
+```
+
+A test asserts those two dependency lists stay identical, because if they drift then one
+of the two installers quietly produces a clone that cannot test itself.
 
 On most Linux set `browser = "chromium"` in `autoweb.toml`. Google ships Chrome as a
 .deb/.rpm for x86_64 only, it is absent from Arch's official repositories, and for ARM
