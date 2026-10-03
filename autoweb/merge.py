@@ -48,6 +48,15 @@ a read-only run. A safety rule that destroys the identity on every successful ru
 a safety rule, so a conflict confined to `VOLATILE_COOKIE_NAMES` keeps root's copy and
 evicts nothing.
 
+The same vendors write the same kind of state into localStorage, and the same run proved
+it: with the cookie rule in place, `li.protechts.net` was still evicted over
+`localStorage[PXdOjV695v_px-ff]`, a PerimeterX fingerprint keyed by their app id. So
+`VOLATILE_STORAGE_MARKERS` does for storage keys what the cookie list does for cookies.
+Matching the key rather than the host is deliberate. Evicting protechts.net is harmless
+in itself, because nobody has an account there; the case that matters is the same key
+appearing under `https://www.linkedin.com`, where a host-based exemption would not have
+helped and a real login would have gone.
+
 **Eviction is by host, and cookies and storage are evicted together.** A cookie's domain
 and an origin's host are different strings for the same site: `.linkedin.com` against
 `https://www.linkedin.com`. Matching them exactly meant a cookie conflict silently spared
@@ -119,6 +128,29 @@ VOLATILE_COOKIE_NAMES = frozenset({
 
 # Names carrying a per-browser id *after* the prefix, so the whole name differs too.
 VOLATILE_COOKIE_PREFIXES = ("incap_ses_", "visid_incap_", "nlbi_")
+
+
+# localStorage keys holding per-browser bot-management state. Substring rather than
+# prefix because the vendor's app id comes first: the measured key was
+# `PXdOjV695v_px-ff`.
+#
+# **Measured conflicting** on the four-lane run of 2026-10-03: one key matching `_px-`.
+# `_px` as a leading marker is PerimeterX's documented client-side prefix and was *not*
+# observed here.
+VOLATILE_STORAGE_MARKERS = ("_px-", "_px_")
+VOLATILE_STORAGE_PREFIXES = ("_px",)
+
+
+def is_volatile_key(name: str) -> bool:
+    """Whether lanes disagreeing about this storage key is expected rather than alarming.
+
+    Narrower than it looks: a bare `_px` prefix or an embedded `_px-`. A broader rule -
+    anything with an underscore, anything that looks like a hash - would hide a genuine
+    token conflict, which is the failure this module exists to prevent.
+    """
+    lowered = name.lower()
+    return (lowered.startswith(VOLATILE_STORAGE_PREFIXES)
+            or any(marker in lowered for marker in VOLATILE_STORAGE_MARKERS))
 
 
 def is_volatile(name: str) -> bool:
@@ -348,6 +380,9 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
                           for name, o in contributors.items()
                           if k in _local_storage(o) and _local_storage(o)[k] != before}
             if len(set(changed_ls.values())) > 1:
+                if is_volatile_key(k):
+                    volatile.setdefault(host, set()).add(f"localStorage[{k}]")
+                    continue
                 note_conflict(host, sorted(changed_ls), f"localStorage[{k}]")
 
         # IndexedDB gets the same treatment as everything else. It did not, once, and
@@ -449,6 +484,10 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
             changed_ls = {name: _local_storage(o)[k]
                           for name, o in contributors.items()
                           if k in _local_storage(o) and _local_storage(o)[k] != before}
+            if len(set(changed_ls.values())) > 1 and is_volatile_key(k):
+                # Ignored in pass 1, so there is no winner to crown here either. Root's
+                # value stays; a key absent from root is left absent.
+                continue
             if changed_ls:
                 merged_ls[k] = next(iter(changed_ls.values()))
                 changed_by += list(changed_ls)
@@ -587,6 +626,8 @@ def write_root(root_path: Path, result: MergeResult) -> Path:
     return root_path
 
 
-__all__ = ["VOLATILE_COOKIE_NAMES", "VOLATILE_COOKIE_PREFIXES", "CookieKey",
+__all__ = ["VOLATILE_COOKIE_NAMES", "VOLATILE_COOKIE_PREFIXES",
+           "VOLATILE_STORAGE_MARKERS", "VOLATILE_STORAGE_PREFIXES", "CookieKey",
            "MergeError", "MergeResult", "OriginDecision", "check_caps", "cookie_key",
-           "hosts_match", "is_volatile", "merge", "merge_files", "write_root"]
+           "hosts_match", "is_volatile", "is_volatile_key", "merge", "merge_files",
+           "write_root"]

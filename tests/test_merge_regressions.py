@@ -343,7 +343,7 @@ def test_a_localstorage_eviction_names_the_key():
         "lane-1": state(origins=[origin("https://a.example", {"token": "1"})]),
         "lane-2": state(origins=[origin("https://a.example", {"token": "2"})]),
     })
-    reason = [d for d in result.decisions if d.action == "evicted"][0].reason
+    reason = next(d.reason for d in result.decisions if d.action == "evicted")
     assert "localStorage[token]" in reason
 
 
@@ -377,3 +377,37 @@ def test_a_volatile_cookie_absent_from_root_is_not_invented():
     assert result.state["cookies"] == []
     assert result.cookies_added == 0
     assert result.evicted_origins == []
+
+
+def test_a_perimeterx_storage_key_does_not_evict_the_site_it_sits_on():
+    """Measured: with the cookie rule in place, `li.protechts.net` was still evicted over
+    `localStorage[PXdOjV695v_px-ff]`. Exempting the host would have been the easy fix and
+    the wrong one - nobody has an account on protechts.net, and the case that matters is
+    the identical key under an origin somebody is logged in to."""
+    root = state(
+        cookies=[cookie("li_at", "SESSION", domain=".linkedin.com")],
+        origins=[origin("https://www.linkedin.com",
+                        {"PXdOjV695v_px-ff": "root", "voyager:badges": "3"})],
+    )
+    result = merge(root, {
+        "lane-1": state(origins=[origin("https://www.linkedin.com",
+                                        {"PXdOjV695v_px-ff": "a"})]),
+        "lane-2": state(origins=[origin("https://www.linkedin.com",
+                                        {"PXdOjV695v_px-ff": "b"})]),
+    })
+    assert result.evicted_origins == []
+    survivors = {i["name"]: i["value"]
+                 for i in result.state["origins"][0]["localStorage"]}
+    assert survivors["PXdOjV695v_px-ff"] == "root", "root's copy, not a lane's"
+    assert survivors["voyager:badges"] == "3", "the real key must be untouched"
+    assert result.volatile_conflicts == {
+        "www.linkedin.com": ["localStorage[PXdOjV695v_px-ff]"]}
+
+
+def test_a_real_storage_token_still_evicts():
+    root = state(origins=[origin("https://a.example", {"refresh_token": "0"})])
+    result = merge(root, {
+        "lane-1": state(origins=[origin("https://a.example", {"refresh_token": "1"})]),
+        "lane-2": state(origins=[origin("https://a.example", {"refresh_token": "2"})]),
+    })
+    assert result.evicted_origins == ["https://a.example"]
