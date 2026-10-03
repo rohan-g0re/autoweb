@@ -499,3 +499,70 @@ def test_an_evicted_cookie_is_not_reported_as_lost():
     assert result.cookies_evicted == 1
     assert result.lost_cookies == []
     assert result.writable
+
+
+# --- the cross-site-ancestor bit is half of the partition key ---------------
+def test_two_rows_differing_only_in_the_ancestor_bit_both_survive():
+    """Measured on the re-merge: two `tag_user_id` rows on `.trueclassictees.com`, one
+    partition site, the bit True on one and False on the other, identical values, and
+    only one survived. Chromium's CookiePartitionKey is the pair (top-level site,
+    has-cross-site-ancestor), so these are two cookies and Chrome exported both.
+
+    The previous key canonicalised an *object* partitionKey with sorted keys, which kept
+    the bit, and ignored the sibling `_crHasCrossSiteAncestor` that arrives alongside a
+    string one. So the encoding decided whether half the identity counted."""
+    first = partitioned("tag_user_id", "same", "https://t.example")
+    first["_crHasCrossSiteAncestor"] = False
+    second = partitioned("tag_user_id", "same", "https://t.example")
+    second["_crHasCrossSiteAncestor"] = True
+
+    result = merge(state(cookies=[first, second]), {"lane-1": state()})
+    assert result.lost_cookies == []
+    assert result.cookie_rows == 2
+    assert {c["_crHasCrossSiteAncestor"] for c in result.state["cookies"]} == {
+        True, False}
+
+
+def test_the_object_and_string_encodings_of_one_partition_still_agree():
+    """Both halves must normalise to the same pair, or the fix for the collapse would
+    manufacture a split instead."""
+    from autoweb.merge import cookie_key
+    as_object = cookie("sid", "v")
+    as_object["partitionKey"] = {"topLevelSite": "https://b.example",
+                                 "hasCrossSiteAncestor": True}
+    as_string = cookie("sid", "v")
+    as_string["partitionKey"] = "https://b.example"
+    as_string["_crHasCrossSiteAncestor"] = True
+    assert cookie_key(as_object) == cookie_key(as_string)
+
+
+def test_an_absent_ancestor_bit_is_its_own_value():
+    """Not False. Whether Playwright omits the field when it is False has not been
+    checked, and guessing re-introduces the collapse for the rows hardest to notice.
+    Splitting one cookie into two is the recoverable direction; merging two into one is
+    the silent data loss."""
+    from autoweb.merge import cookie_key
+    without = partitioned("sid", "v", "https://b.example")
+    with_false = partitioned("sid", "v", "https://b.example")
+    with_false["_crHasCrossSiteAncestor"] = False
+    assert cookie_key(without) != cookie_key(with_false)
+
+
+def test_a_key_that_arrives_twice_refuses_the_write(tmp_path):
+    """The invariant counts rows rather than testing set membership. Two input rows this
+    module cannot tell apart must refuse rather than silently keep one: that is the only
+    shape the second CHIPS defect had, and membership could not see it because the
+    surviving row's key was present in the output.
+
+    It also fired by coincidence the first time. Rows in equalled rows out because one
+    row collapsed and one unrelated cookie was added, so a total-only check balanced."""
+    same = cookie("ambiguous", "v")
+    root = state(cookies=[dict(same), dict(same)])
+    result = merge(root, {"lane-1": state()})
+    assert result.cookie_rows == 1
+    assert len(result.lost_cookies) == 1
+    assert "2 row(s) in, 1 out" in result.lost_cookies[0]
+    assert not result.writable
+    with pytest.raises(MergeError, match="cannot tell them apart"):
+        write_root(tmp_path / "root.json", result)
+    assert not (tmp_path / "root.json").exists()

@@ -112,17 +112,51 @@ def cookie_key(cookie: dict[str, Any]) -> CookieKey:
 def _partition(cookie: dict[str, Any]) -> str:
     """One stable string for a cookie's partition, or empty for an unpartitioned one.
 
-    Playwright has carried `partitionKey` as both a bare top-level-site string and an
-    object (`topLevelSite` plus `hasCrossSiteAncestor`), and Chrome's own export adds
-    `_crHasCrossSiteAncestor`. A dict is canonicalised with sorted keys so that two
-    encodings of the same partition compare equal instead of manufacturing a duplicate.
+    Chromium's `CookiePartitionKey` is a *pair*: the top-level site and a
+    has-cross-site-ancestor bit. Both halves are part of the identity, so two cookies
+    differing only in that bit are two cookies, and Chrome exports both.
+
+    Playwright carries the pair two ways. As an object it is `topLevelSite` plus
+    `hasCrossSiteAncestor`; as a bare site string the bit arrives beside it as
+    `_crHasCrossSiteAncestor`. Normalising to the pair rather than to the encoding makes
+    both spellings agree while keeping the bit. The previous version canonicalised an
+    object partitionKey with sorted keys, which kept the bit, and ignored the sibling
+    field entirely, so a string-encoded pair lost it and two real cookies collapsed into
+    one. Measured on the re-merge: two `tag_user_id` rows on `.trueclassictees.com`, one
+    partition site, the bit True on one and False on the other, and only one survived.
+
+    An absent bit is its own value, not False. Whether Playwright omits the field when it
+    is False has not been checked here, and guessing would re-introduce the collapse for
+    exactly the rows that are hardest to notice.
     """
     raw = cookie.get("partitionKey")
-    if raw is None or raw == "":
-        return ""
     if isinstance(raw, dict):
-        return json.dumps(raw, sort_keys=True, separators=(",", ":"))
-    return _text(raw)
+        site = _text(raw.get("topLevelSite"))
+        ancestor = raw.get("hasCrossSiteAncestor")
+    else:
+        site = _text(raw)
+        ancestor = cookie.get("_crHasCrossSiteAncestor")
+    if not site:
+        return ""
+    bit = "?" if ancestor is None else ("1" if ancestor else "0")
+    return f"{site}|{bit}"
+
+
+def _row_counts(state: dict[str, Any]) -> dict[CookieKey, int]:
+    """How many *rows* each cookie identity has, which `_cookies_by_key` cannot say.
+
+    `_cookies_by_key` builds a dict, so duplicate keys collapse on load and the loss
+    happens before the merge runs. Counting rows separately is what lets the invariant
+    notice that a key arrived twice and left once - the second CHIPS defect was invisible
+    to a set-membership check because both rows mapped to one key that *was* present in
+    the output.
+    """
+    counts: dict[CookieKey, int] = {}
+    for cookie in state.get("cookies") or []:
+        if isinstance(cookie, dict):
+            key = cookie_key(cookie)
+            counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def _text(value: Any) -> str:
@@ -585,11 +619,21 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
         volatile_conflicts={host: sorted(names)
                             for host, names in sorted(volatile.items())},
     )
-    result.lost_cookies = sorted(
-        f"{key[0]} on {key[1]}{key[2]}" + (f" [partition {key[3]}]" if key[3] else "")
-        for key in root_cookies
-        if key not in merged_cookies and not _matches_any(_host(key[1]), evicted_hosts)
-    )
+    # Row counts, not set membership. A key with two rows in and one out is a loss even
+    # though the key itself is present, and that is the only shape the second CHIPS
+    # defect had. It also means a pair this module's key definition cannot tell apart
+    # refuses the write instead of quietly keeping whichever came last.
+    lost: list[str] = []
+    for key, rows_in in sorted(_row_counts(root).items()):
+        if _matches_any(_host(key[1]), evicted_hosts):
+            continue
+        rows_out = 1 if key in merged_cookies else 0
+        if rows_out < rows_in:
+            where = f"{key[0]} on {key[1]}{key[2]}"
+            if key[3]:
+                where += f" [partition {key[3]}]"
+            lost.append(f"{where}: {rows_in} row(s) in, {rows_out} out")
+    result.lost_cookies = lost
     result.cap_violations = check_caps(result, cfg)
     return result
 
@@ -671,7 +715,9 @@ def write_root(root_path: Path, result: MergeResult) -> Path:
             f"refusing to write: {len(result.lost_cookies)} cookie(s) in the ancestor "
             f"are neither in the merged state nor counted as evicted, so this merge "
             f"would lose them silently. This is a bug in autoweb.merge, not in your "
-            f"inputs, and the previous root is untouched. First few: "
+            f"inputs, and the previous root is untouched. A cookie listed with "
+            f"more rows in than out means two rows share this module's idea of a "
+            f"cookie identity and it cannot tell them apart. First few: "
             + "; ".join(shown)
         )
     if not result.writable:

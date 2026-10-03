@@ -467,8 +467,35 @@ Two further things fell out of it, both general:
   lane, because conflicts were recorded against the cookie's host (`linkedin.com`) and
   reported against the origin's (`www.linkedin.com`).
 
-After both fixes, across four concurrent read-only lanes on a real identity, **the only
-conflicts anywhere were bot-management state**. No session cookie and no application
+**And a cookie's identity is not `(name, domain, path)`.** Writing the merge for real
+cost 737 cookie rows, reported as `0 evicted`. Under CHIPS a partitioned cookie is scoped
+to the top-level site it was set under, so 36 names existed in several partitions each
+and all but one copy of each was dropped. The summary said "3166 kept" because it counted
+identities rather than rows, so the arithmetic that should have exposed the collapse was
+the thing concealing it. LinkedIn and Google were unaffected and `state verify` passed,
+which is why nothing looked wrong.
+
+Putting `partitionKey` in the key fixed most of it and left a narrower version standing,
+found on the re-merge: Chromium's `CookiePartitionKey` is the **pair** (top-level site,
+has-cross-site-ancestor), and Playwright carries that pair two ways - as an object with
+`hasCrossSiteAncestor`, or as a bare site string with `_crHasCrossSiteAncestor` beside
+it. Canonicalising the object kept the bit; the string form silently lost it. Two
+`tag_user_id` rows on `.trueclassictees.com` differing only in that bit collapsed to one.
+Total row counts balanced by coincidence, because one unrelated cookie was added in the
+same merge.
+
+Two rules fall out, and they generalise past cookies:
+
+- **Normalise to the semantic thing, not to the encoding.** "Canonicalise the dict with
+  sorted keys" is a statement about JSON. The identity is a pair, and a sibling field is
+  part of it.
+- **An accounting invariant must count rows, not test membership.** Both collapsed rows
+  mapped to one key that *was* present in the output, so a set-membership check saw
+  nothing. Row counts per key catch it, and a key that still arrives twice now refuses the
+  write rather than quietly keeping whichever came last.
+
+After both volatile fixes, across four concurrent read-only lanes on a real identity,
+**the only conflicts anywhere were bot-management state**. No session cookie and no application
 storage key disagreed at all. The honest reading of that is narrow: on a cookie-session
 site, read-only lanes do not fight. It says nothing yet about a lane that writes.
 
