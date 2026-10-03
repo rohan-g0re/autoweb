@@ -183,6 +183,33 @@ and current tab. These things about that, all **live**:
   start and a one-page read is about three calls, so short lanes come and go. A single
   message buys overlap, not a guarantee of it.
 
+- **And they do it from one real logged-in identity, which is the claim that matters.**
+  **live, 2026-10-03, Arch Linux x86_64.** Every lane run before this one started from an
+  empty `storageState`, so none of them proved the thing the feature exists for. This one
+  started from a copy of a real Pursuit LinkedIn Chrome profile, logged in by hand and
+  exported to a 1.5 MB `root.json`.
+
+  Four lanes, four read-only LinkedIn and Google tasks, dispatched in one assistant
+  message by a fresh `claude -p` told nothing about AutoWeb. A poller outside the run saw
+  **four distinct `--user-data-dir` values held continuously for 44 seconds**, 17:51:38 to
+  17:52:22 UTC, 56 chrome processes at peak. `autoweb trace` exited 0 with all four alive
+  together for **21.6 seconds**, 17:51:45.128 to 17:52:06.690. No lane drifted onto
+  another's page; one ended on `/mynetwork/grow/` because LinkedIn redirects there itself.
+
+  Two numbers worth keeping. `T0_start` was staggered about **4.5 seconds per lane**, so
+  browser startup serialises and the overlap is what happens after it - which is the
+  mechanism behind the earlier note that a single message buys overlap rather than
+  guarantees it. And memory was not the constraint the lane count was being rationed
+  against: 13,441 MB free with no browsers, **8,393 MB at the minimum** with four real
+  sites loaded.
+
+- **Four concurrent uses of one session rotated nothing.** **live, same run.** `li_at` and
+  `JSESSIONID` came back byte-identical from `root.json` and all four lane files. No
+  authwall, no checkpoint, no device-verification mail. This is one site on one run and
+  not a general licence - §6 is still right that an OAuth refresh token is a different
+  animal from a cookie session - but the specific fear that N browsers sharing one
+  LinkedIn cookie trips a concurrency defence did not happen here.
+
 - **Beware of how you measure the dispatch, not just the browsers.** **live, and it
   produced a false finding before it was caught.** `claude -p --output-format
   stream-json` emits one event per content block, so a single assistant message holding
@@ -407,6 +434,43 @@ multiple machines."*
 Playwright does not help here: its `--password-store=basic` and
 `--use-mock-keychain` defaults are Linux/macOS-only no-ops on Windows. Its own
 profiles are equally non-portable. **`storageState` JSON is the portable form.**
+
+### The first thing that actually destroyed an identity was the merge rule
+
+**live, 2026-10-03, and caught by a dry run rather than by a test.** Everything below
+this is still true and still waiting. It is not what went wrong first.
+
+The first merge of four real lane files proposed evicting `www.linkedin.com`,
+`accounts.google.com`, `www.google.com` and `li.protechts.net` - **every origin**, down
+to zero, and 59 cookies with them. Nothing had rotated: `li_at` and `JSESSIONID` were
+byte-identical in all four lane files. The conflicts were entirely per-browser
+bot-management values - `__cf_bm` (Cloudflare), `_px3` and `pxcts` (PerimeterX),
+`__Secure-3PSIDCC` (Google) - which a browser mints for itself, so N fresh browsers
+*always* produce N different ones.
+
+The rule "a conflict evicts the whole host" was written to protect an OAuth token family
+from a replayed refresh token. Applied to every cookie it instead signed `root.json` out
+of LinkedIn **as the direct result of a successful read-only run**. A safety rule that
+destroys the identity every time it works is not a safety rule.
+
+Two further things fell out of it, both general:
+
+- **The same vendors write the same state into localStorage.** With the cookie exemption
+  in place, `li.protechts.net` was still evicted over `localStorage[PXdOjV695v_px-ff]`, a
+  PerimeterX fingerprint keyed by their app id. Exempting the *host* is the wrong fix:
+  evicting protechts.net costs nothing because nobody has an account there, and the case
+  that matters is the identical key appearing under an origin somebody is logged in to.
+  Match the key.
+- **An eviction notice has to name what triggered it.** The first dry run said only "two
+  lanes changed the same value to different things", which is exactly as consistent with
+  token rotation as with a merge defect, and it was read as the former. It also named no
+  lane, because conflicts were recorded against the cookie's host (`linkedin.com`) and
+  reported against the origin's (`www.linkedin.com`).
+
+After both fixes, across four concurrent read-only lanes on a real identity, **the only
+conflicts anywhere were bot-management state**. No session cookie and no application
+storage key disagreed at all. The honest reading of that is narrow: on a cookie-session
+site, read-only lanes do not fight. It says nothing yet about a lane that writes.
 
 ### The merge killer is not cookies
 

@@ -63,6 +63,17 @@ and an origin's host are different strings for the same site: `.linkedin.com` ag
 every origin of that site, and the gap between the two blast radii is where the
 half-identity lived.
 
+**Nothing may vanish unreported.** Every cookie the ancestor held must end up either in
+the result or in the evicted count, and the merge refuses to write if it cannot account
+for one. This is not belt-and-braces: the first real merge wrote a `root.json` that had
+lost 737 cookie rows while reporting `0 evicted`. The identity key was
+`(name, domain, path)`, which under CHIPS is not an identity at all - a partitioned
+cookie is per top-level site, so 36 names appeared in several partitions each and all but
+one copy of each was silently dropped. The count said "3166 kept" because it was counting
+keys rather than rows, so the arithmetic that should have exposed it was the thing hiding
+it. LinkedIn and Google were unaffected and `state verify` passed, which is precisely why
+a loud invariant is worth more here than a careful reading of the summary.
+
 **A cap refuses the write rather than truncating.** Trimming to fit would make which login
 survives depend on argument order. Violations are reported on the result instead of raised
 so that `--dry-run` can still show the operator every decision alongside the reason
@@ -84,14 +95,34 @@ class MergeError(Exception):
     """A merge that must not proceed: an input we cannot trust, or a bad invocation."""
 
 
-# A cookie's identity, per RFC 6265: the triple, not the name. A name-keyed merge would
-# cross-contaminate `__Host-` and `__Secure-` variants of the same name.
-CookieKey = tuple[str, str, str]
+# A cookie's identity: name, domain, path - per RFC 6265 - *and* the partition key. A
+# name-keyed merge would cross-contaminate `__Host-` and `__Secure-` variants of the same
+# name, and a triple-keyed one loses partitioned cookies, which is not hypothetical: the
+# first real merge dropped 737 rows this way. Under CHIPS (`Set-Cookie: ...; Partitioned`)
+# a cookie is scoped to the top-level site it was set under, so the same name, domain and
+# path in two partitions are two different cookies that must both survive.
+CookieKey = tuple[str, str, str, str]
 
 
 def cookie_key(cookie: dict[str, Any]) -> CookieKey:
     return (_text(cookie.get("name")), _text(cookie.get("domain")),
-            _text(cookie.get("path")) or "/")
+            _text(cookie.get("path")) or "/", _partition(cookie))
+
+
+def _partition(cookie: dict[str, Any]) -> str:
+    """One stable string for a cookie's partition, or empty for an unpartitioned one.
+
+    Playwright has carried `partitionKey` as both a bare top-level-site string and an
+    object (`topLevelSite` plus `hasCrossSiteAncestor`), and Chrome's own export adds
+    `_crHasCrossSiteAncestor`. A dict is canonicalised with sorted keys so that two
+    encodings of the same partition compare equal instead of manufacturing a duplicate.
+    """
+    raw = cookie.get("partitionKey")
+    if raw is None or raw == "":
+        return ""
+    if isinstance(raw, dict):
+        return json.dumps(raw, sort_keys=True, separators=(",", ":"))
+    return _text(raw)
 
 
 def _text(value: Any) -> str:
@@ -219,6 +250,11 @@ class MergeResult:
     # like the merge did nothing, and whether an expiry refresh counts as an update is a
     # question the output should answer rather than the reader of this file.
     cookies_refreshed: int = 0
+    # Ancestor cookies that are neither in the result nor counted as evicted. Always
+    # empty; a non-empty list is a bug in this module and refuses the write, because the
+    # alternative is what already happened once - a root.json quietly missing 737 rows
+    # that still passed `state verify` and looked entirely healthy.
+    lost_cookies: list[str] = field(default_factory=list)
     # host -> volatile cookie names that disagreed and were deliberately not acted on.
     # Reported, because "nothing conflicted" and "four bot-management cookies conflicted
     # and were ignored on purpose" must not look the same from outside.
@@ -234,8 +270,14 @@ class MergeResult:
         return len(json.dumps(self.state, indent=2) + "\n")
 
     @property
+    def cookie_rows(self) -> int:
+        """Rows as written. `cookies_kept` counts identities, and the difference between
+        the two is where the CHIPS collapse hid."""
+        return len(self.state.get("cookies") or [])
+
+    @property
     def writable(self) -> bool:
-        return not self.cap_violations
+        return not self.cap_violations and not self.lost_cookies
 
 
 def _origins_by_name(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -543,6 +585,11 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
         volatile_conflicts={host: sorted(names)
                             for host, names in sorted(volatile.items())},
     )
+    result.lost_cookies = sorted(
+        f"{key[0]} on {key[1]}{key[2]}" + (f" [partition {key[3]}]" if key[3] else "")
+        for key in root_cookies
+        if key not in merged_cookies and not _matches_any(_host(key[1]), evicted_hosts)
+    )
     result.cap_violations = check_caps(result, cfg)
     return result
 
@@ -618,6 +665,15 @@ def write_root(root_path: Path, result: MergeResult) -> Path:
     so a crash cannot leave a half-identity and a merge that was valid but wrong is
     recoverable.
     """
+    if result.lost_cookies:
+        shown = result.lost_cookies[:10]
+        raise MergeError(
+            f"refusing to write: {len(result.lost_cookies)} cookie(s) in the ancestor "
+            f"are neither in the merged state nor counted as evicted, so this merge "
+            f"would lose them silently. This is a bug in autoweb.merge, not in your "
+            f"inputs, and the previous root is untouched. First few: "
+            + "; ".join(shown)
+        )
     if not result.writable:
         raise MergeError(
             "refusing to write: " + "; ".join(result.cap_violations)

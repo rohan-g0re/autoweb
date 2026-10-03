@@ -411,3 +411,91 @@ def test_a_real_storage_token_still_evicts():
         "lane-2": state(origins=[origin("https://a.example", {"refresh_token": "2"})]),
     })
     assert result.evicted_origins == ["https://a.example"]
+
+
+# --- partitioned cookies: the first real merge lost 737 rows -----------------
+def partitioned(name, value, site, domain=".a.example"):
+    c = cookie(name, value, domain=domain)
+    c["partitionKey"] = site
+    return c
+
+
+def test_two_partitions_of_one_cookie_both_survive():
+    """Measured on the first merge ever written to a real root.json: 3903 cookie rows in,
+    3167 out, and "0 evicted" in the report. 36 names appeared in several CHIPS partitions
+    each and all but one copy of each was dropped. Under
+    `Set-Cookie: ...; Partitioned` a cookie is scoped to the top-level site it was set
+    under, so (name, domain, path) is not an identity."""
+    root = state(cookies=[
+        partitioned("__Secure-ROLLOUT_TOKEN", "x", "https://youtube.com"),
+        partitioned("__Secure-ROLLOUT_TOKEN", "y", "https://google.com"),
+    ])
+    result = merge(root, {"lane-1": state()})
+    assert result.cookie_rows == 2
+    assert {c["partitionKey"] for c in result.state["cookies"]} == {
+        "https://youtube.com", "https://google.com"}
+    assert result.lost_cookies == []
+
+
+def test_a_partitioned_and_an_unpartitioned_cookie_are_different_cookies():
+    root = state(cookies=[cookie("sid", "plain"),
+                          partitioned("sid", "scoped", "https://b.example")])
+    result = merge(root, {"lane-1": state()})
+    assert result.cookie_rows == 2
+    assert result.cookies_kept == 2
+
+
+def test_the_two_encodings_of_one_partition_key_are_not_two_cookies():
+    """Playwright has carried partitionKey as a bare string and as an object, and Chrome
+    adds `_crHasCrossSiteAncestor`. Canonicalising the dict stops two spellings of one
+    partition from looking like a duplicate and tripping the lost-cookie invariant."""
+    a = cookie("sid", "v")
+    a["partitionKey"] = {"topLevelSite": "https://b.example",
+                         "hasCrossSiteAncestor": False}
+    b = cookie("sid", "v")
+    b["partitionKey"] = {"hasCrossSiteAncestor": False,
+                         "topLevelSite": "https://b.example"}
+    from autoweb.merge import cookie_key
+    assert cookie_key(a) == cookie_key(b)
+
+
+def test_a_partitioned_cookie_a_lane_changed_updates_only_its_own_partition():
+    root = state(cookies=[partitioned("t", "old", "https://x.example"),
+                          partitioned("t", "old", "https://y.example")])
+    result = merge(root, {
+        "lane-1": state(cookies=[partitioned("t", "new", "https://x.example")]),
+    })
+    by_partition = {c["partitionKey"]: c["value"] for c in result.state["cookies"]}
+    assert by_partition == {"https://x.example": "new", "https://y.example": "old"}
+    assert result.cookies_updated == 1
+
+
+def test_a_merge_that_would_lose_a_cookie_refuses_to_write(tmp_path, monkeypatch):
+    """The invariant itself. It can only fire on a bug in merge.py, so it is provoked by
+    making the result drop a cookie after the fact - a test of the guard, not of a path
+    that exists. A silent loss is worse than a refusal: the lost root.json verified fine
+    and looked healthy."""
+    root = state(cookies=[cookie("sid", "keep"), cookie("other", "keep")])
+    result = merge(root, {"lane-1": state()})
+    assert result.writable and result.lost_cookies == []
+
+    result.state["cookies"] = [c for c in result.state["cookies"]
+                               if c["name"] != "other"]
+    result.lost_cookies = ["other on .a.example/"]
+    assert not result.writable
+    with pytest.raises(MergeError, match="neither in the merged state nor counted"):
+        write_root(tmp_path / "root.json", result)
+    assert not (tmp_path / "root.json").exists()
+
+
+def test_an_evicted_cookie_is_not_reported_as_lost():
+    """Eviction is accounted for, so the invariant must not fire on it."""
+    root = state(cookies=[cookie("li_at", "SESSION", domain=".linkedin.com")],
+                 origins=[origin("https://www.linkedin.com", {"k": "v"})])
+    result = merge(root, {
+        "lane-1": state(cookies=[cookie("li_at", "A", domain=".linkedin.com")]),
+        "lane-2": state(cookies=[cookie("li_at", "B", domain=".linkedin.com")]),
+    })
+    assert result.cookies_evicted == 1
+    assert result.lost_cookies == []
+    assert result.writable

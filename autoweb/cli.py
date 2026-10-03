@@ -431,6 +431,10 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     print()
     print(f"  cookies: {result.cookies_kept} kept, {result.cookies_updated} updated, "
           f"{result.cookies_added} added, {result.cookies_evicted} evicted")
+    # Rows, separately from identities. The first real merge reported "3166 kept" and
+    # wrote 737 fewer rows than it was given, because partitioned cookies share a name,
+    # domain and path and the count was of keys. Print both and the gap is visible.
+    print(f"           {result.cookie_rows} cookie rows written")
     if result.cookies_refreshed:
         # "0 updated" after four real sessions reads like the merge did nothing. Usually
         # it means the servers extended cookies without rotating them, which is a kept
