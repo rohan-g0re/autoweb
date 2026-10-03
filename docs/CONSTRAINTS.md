@@ -137,7 +137,7 @@ parallel safely. The shape matters: a mapping is ignored silently.
 
 AutoWeb's lanes are the N-stdio-processes shape. `.claude/agents/lane-N.md` declares an
 inline `mcpServers` block, so each lane gets its own server process, browser, context
-and current tab. Three things about that, all **live**:
+and current tab. These things about that, all **live**:
 
 - **Claude Code de-duplicates inline servers by name across concurrently-running
   subagents.** Two lane files that each declared a server named `lane` collapsed into
@@ -158,6 +158,29 @@ and current tab. Three things about that, all **live**:
 - **Inside a subagent, MCP tools arrive deferred**: the names are visible, the schemas
   are not. One `ToolSearch` call before the first browser call is enough, verified
   across four lane executions. Budget it as a call.
+
+- **Discovery works, and it is worth testing separately from the mechanism.** **live.**
+  Two fresh sessions were given only a task over four news sites. The first was told
+  nothing about lanes or parallelism and still dispatched four of them, finding them
+  through the generated agent descriptions alone. The second was told the work split
+  four ways; it loaded the `parallel-lanes` skill, ran `autoweb lanes list`, read the
+  one hand-written lane file to see why it was excluded, checked `root.json` existed,
+  and then dispatched the four generated lanes. Four distinct
+  `playwright_chromiumdev_profile-*` directories per run, every lane calling only its
+  own `mcp__laneN__*` tools, no lane touching `mcp__playwright__*`.
+
+- **Dispatching in separate messages silently serialises the lanes.** **live.** Both
+  runs above sent each delegation in its own message. Peak concurrent browsers was two
+  of four in the first run and three of four in the second, because an early lane
+  finished before a later one launched. Both runs then reported that all four had run at
+  once. A staggered dispatch and a parallel one are indistinguishable from inside the
+  orchestrator, so this is only visible by counting processes from outside.
+
+- **`browser_navigate` does not return the snapshot inline.** **live.** On 0.0.83 it
+  writes the page to `.playwright-mcp/page-<timestamp>.yml` and returns a pointer, so a
+  lane needs a separate `browser_snapshot` or a file read before it can act. The floor
+  for "look at one page" is three calls, not two. This matters for the tool-call budget
+  in CLAUDE.md design rule 6, and it is why those files accumulate in the repo root.
 
 ## 5. Windows profile locking — fails silently
 

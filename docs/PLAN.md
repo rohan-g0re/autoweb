@@ -111,7 +111,36 @@ browsers rather than by reading the file that was supposed to cause it.
 **Test (Fable):** spawn lanes concurrently on different sites; assert distinct browser
 processes, no shared current tab, and each logged in from the same root. Counting
 processes is the assertion that matters: both failures above looked correct in the
-generated file.
+generated file. **Passed at N=2** on the third gate: two live
+`playwright_chromiumdev_profile-*` directories at once, sixteen extra chrome processes,
+neither lane able to see the other's tab.
+
+**Test (discovery): passed.** A fresh session told nothing about lanes dispatched four of
+them anyway, finding them through the generated agent descriptions. A second, told the
+work split four ways, loaded the skill, ran `autoweb lanes list`, inspected the one
+hand-written lane to see why it was excluded, and dispatched the four generated lanes.
+Four distinct browser profiles per run, correct per-lane tool isolation, real headlines
+off four sites.
+
+One defect found, in the skill rather than the code: both runs sent each delegation in
+its own message, so peak concurrency was two of four and then three of four. Both then
+claimed all four ran at once. The skill now leads with single-message dispatch and says
+why you cannot verify it from your own transcript.
+
+Still owed at this line: a run that proves four browsers alive *simultaneously*, and a
+run where the lanes are seeded with a real identity rather than an empty storageState.
+
+**The original reasoning, kept because it generalises.** Every gate before this was told
+that lanes exist and which ones to dispatch. That tests the mechanism and not the feature, because in real use
+nobody tells the orchestrator. So: hand a fresh Opus agent that knows nothing about
+lanes a task that happens to decompose, say nothing about lanes or parallelism, and see
+whether it finds the `parallel-lanes` skill, reads `autoweb lanes list`, and dispatches
+on its own. Then repeat with the decomposition stated out loud ("the same thing on four
+different sites") to separate "cannot discover" from "cannot execute". Both runs assert
+the same thing the mechanism test does, by counting browsers rather than by believing
+the agent's own account of what it did.
+
+A skill nobody invokes is a skill that does not work, however correct its contents.
 
 ## Phase 4 — teardown and harvest
 

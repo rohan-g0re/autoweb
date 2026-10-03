@@ -17,8 +17,22 @@ been used starts logged out. If the lanes you dispatch behave as though nobody l
 in, check `autoweb config show` for that flag before blaming the sites. Parallel work
 wants the default.
 
-Dispatch a lane by delegating to the subagent named `lane-1`, `lane-2` and so on, one
-task each, in a single message so they run at the same time.
+## Dispatch every lane in one message
+
+Delegate to the subagents named `lane-1`, `lane-3` and so on, one task each, and put
+**all of those delegations in a single message**. This is the whole mechanism. A lane
+dispatched in its own message starts only after the previous message is done, so lanes
+you meant to overlap end up taking turns.
+
+It is easy to get this wrong while believing you got it right. Two measured runs
+dispatched four lanes correctly in every other respect, each in a separate message, and
+only two then three of the four browsers were ever alive at the same time: the first
+lane had finished before the last one started. Both runs reported "all four ran at
+once", because from inside the orchestrator a staggered dispatch and a parallel one look
+identical. You cannot tell from your own transcript. Send one message.
+
+A lane is also short. Reading one page is about three calls, so a lane often finishes
+inside the time it takes to send the next delegation.
 
 ## Decide how many
 
