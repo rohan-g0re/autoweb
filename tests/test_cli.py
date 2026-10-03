@@ -56,6 +56,8 @@ def test_no_subcommand_prints_help_and_fails(capsys):
     ["state", "inspect"],
     ["lanes", "list"],
     ["lanes", "sync"],
+    ["trace", "missing.json"],
+    ["merge", "missing-lane.json"],
 ])
 def test_every_documented_command_resolves(argv, project):
     """A command named in the README that argparse rejects is a broken promise. This

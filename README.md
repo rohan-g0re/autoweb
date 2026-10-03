@@ -101,19 +101,29 @@ only needed by `autoweb state`, which is the one part that drives a browser itse
 
 ## The CLI
 
-Seven commands. Every one of them prints its own help.
+Nine commands. Every one of them prints its own help.
 
 ```sh
 autoweb config show              # effective config, defaults included
 autoweb config check             # validate autoweb.toml, non-zero exit if malformed
 
 autoweb state export URL         # headed browser, you log in, the session is saved
+autoweb state export --from-profile DIR --visit URL
+                                 # read a profile that is already logged in, no human
 autoweb state inspect [PATH]     # origins, cookies, IndexedDB, bytes
 autoweb state verify URL [PATH]  # seed a fresh browser from the JSON, report what it sees
 
 autoweb lanes sync               # write .claude/agents/lane-N.md, one per lane
 autoweb lanes list               # show the lane files that exist
+
+autoweb trace TRACE_JSON         # did the lanes really overlap? exits non-zero if not
+autoweb merge LANE_JSON...       # fold lane state back into root.json, three-way
 ```
+
+Three of those are assertions rather than tools, and exit non-zero when what they check
+does not hold: `config check`, `state verify`, and `trace`. `state export` joins them when
+it captures nothing at all, because an empty state file that parses is the failure most
+likely to be mistaken for a success.
 
 Settings live in [`autoweb.toml`](autoweb.toml), every key has a working default, and
 each one is documented where it is defined in `autoweb/config.py` rather than in a

@@ -73,14 +73,35 @@ def test_pairwise_overlap_without_a_common_instant_fails():
     assert verdict.overlap_seconds == 0.0
 
 
-def test_one_lane_finishing_early_breaks_the_whole_run():
-    """All lanes, not most of them."""
+def test_a_short_lane_still_counts_if_it_overlapped():
+    """My own first version of this test asserted the opposite, and the test was wrong
+    rather than the code.
+
+    A lane alive from 0 to 4 seconds while two others run to 30 really did share two
+    seconds with them, and the rule in the goal document says exactly that: latest load
+    before earliest end. There is no minimum-overlap threshold, deliberately, because any
+    threshold would be a number nobody could justify. If a two second overlap is not good
+    enough for a particular run, the fix is to give the lanes more work, not to move this
+    goalpost.
+    """
     verdict = judge(parse({
         "lane-1": marks(0, 2, 3, 4),
         "lane-3": marks(0, 2, 28, 30),
         "lane-4": marks(0, 2, 28, 31),
     }))
+    assert verdict.concurrent
+    assert verdict.overlap_seconds == pytest.approx(2.0)
+
+
+def test_one_lane_running_entirely_after_another_fails():
+    """The real serial case, which is what the previous test was reaching for."""
+    verdict = judge(parse({
+        "lane-1": marks(0, 1, 2, 3),
+        "lane-3": marks(5, 6, 28, 30),
+        "lane-4": marks(5, 6, 28, 31),
+    }))
     assert not verdict.concurrent
+    assert ("lane-1", "lane-3") in verdict.serial_pairs
 
 
 # --- what must not be believed ---------------------------------------------

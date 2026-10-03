@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import timezone
 from pathlib import Path
 
 from . import __version__, lanes, merge as merge_mod, state, trace
@@ -148,6 +149,32 @@ def _cmd_state_export(args: argparse.Namespace) -> int:
     print()
     suffix = "" if not args.out else f" {summary.path}"
     target = args.url or (args.visit[0] if args.visit else "<a logged-in url>")
+
+    # An export that captured nothing is the expensive failure, because the file parses,
+    # the command looks like it worked, and the emptiness only surfaces later as a lane
+    # that is mysteriously logged out. Exit non-zero so a script cannot miss it.
+    if summary.cookies == 0 and not summary.origins_with_session:
+        print("  FAIL: nothing was captured. No cookies, and no origin carrying a "
+              "session.", file=sys.stderr)
+        if args.from_profile:
+            print(file=sys.stderr)
+            print("  The most likely cause on Linux is a browser channel mismatch. "
+                  "Chrome and", file=sys.stderr)
+            print("  Chromium keep the cookie encryption key under different OS keyring "
+                  "entries", file=sys.stderr)
+            print("  ('Chrome Safe Storage' against 'Chromium Safe Storage'), so a "
+                  "profile written", file=sys.stderr)
+            print("  by one decrypts to nothing when opened by the other, with no error "
+                  "raised.", file=sys.stderr)
+            print(f"  This run used lanes.browser = '{cfg.lanes.browser}'. Open the "
+                  f"profile with", file=sys.stderr)
+            print("  the same browser that created it.", file=sys.stderr)
+            print(file=sys.stderr)
+            print("  The other possibility is that the --visit origins are not actually "
+                  "signed in", file=sys.stderr)
+            print("  in that profile.", file=sys.stderr)
+        return 1
+
     print(f"  verify it:  autoweb state verify {target}{suffix}")
     return 0
 
@@ -325,7 +352,11 @@ def _cmd_trace(args: argparse.Namespace) -> int:
     print(f"  {'lane':<12} {'T0_start':<14} {'T1_loaded':<14} {'T3_end':<14}  seconds")
     for lane in verdict.lanes:
         def clock(mark: str) -> str:
-            return lane.marks[mark].strftime("%H:%M:%S.%f")[:-3]
+            # Normalised to UTC. Printing each mark in its own offset would show
+            # 14:00:02 beside 19:30:03 and then call them concurrent, which is correct
+            # and reads like a bug.
+            return (lane.marks[mark].astimezone(timezone.utc)
+                    .strftime("%H:%M:%S.%f")[:-3])
         print(f"  {lane.lane:<12} {clock('T0_start'):<14} {clock('T1_loaded'):<14} "
               f"{clock('T3_end'):<14}  {lane.duration_seconds:>6.1f}")
     print()
@@ -338,7 +369,7 @@ def _cmd_trace(args: argparse.Namespace) -> int:
         return 0
 
     print("  SERIAL: there is no instant at which every lane was alive.", file=sys.stderr)
-    print(f"    latest T1_loaded is after the earliest T3_end.", file=sys.stderr)
+    print("    latest T1_loaded is after the earliest T3_end.", file=sys.stderr)
     for first, second in verdict.serial_pairs:
         print(f"    {first} had already finished before {second} started",
               file=sys.stderr)

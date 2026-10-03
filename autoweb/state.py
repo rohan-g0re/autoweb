@@ -417,6 +417,17 @@ def export_from_profile(
             f"{profile_dir}: no profile directory here. Point --from-profile at a "
             f"browser profile directory, or copy one there first."
         )
+    # A user-data-dir contains `Local State` and a per-profile subdirectory. Pointing at
+    # the *inner* `Default` directory is the mistake the flag's wording invites, and
+    # Chromium would happily create a fresh empty profile inside it and export nothing.
+    if not (profile_dir / "Local State").exists() and not (profile_dir / "Default").is_dir():
+        raise StateError(
+            f"{profile_dir}: this does not look like a browser user-data-dir - it has "
+            f"neither a 'Local State' file nor a 'Default' directory. If you pointed at "
+            f"a profile's inner directory, pass its parent instead: a browser opened on "
+            f"the wrong level creates an empty profile and exports nothing, which looks "
+            f"like a successful export of no identity."
+        )
 
     pw_api = _playwright()
     with pw_api() as pw:
@@ -425,13 +436,15 @@ def export_from_profile(
         try:
             for url in visit or []:
                 page = context.new_page()
-                try:
-                    _goto(page, url, timeout_seconds)
-                    # Settle: tokens in IndexedDB are often written by script that runs
-                    # after domcontentloaded, so harvesting immediately can miss them.
-                    page.wait_for_timeout(2000)
-                finally:
-                    page.close()
+                _goto(page, url, timeout_seconds)
+                # Settle: tokens in IndexedDB are often written by script that runs after
+                # domcontentloaded, so harvesting immediately can miss them.
+                page.wait_for_timeout(2500)
+            # The pages stay open on purpose. `storageState` harvests an origin from a
+            # live page when there is one and otherwise reopens the origin itself, so
+            # closing them should be harmless - but should is doing a lot of work in that
+            # sentence, and `context.close()` below tears them down regardless. Leaving
+            # them open costs nothing and removes the question.
             state = context.storage_state(indexed_db=indexeddb)
         finally:
             context.close()
