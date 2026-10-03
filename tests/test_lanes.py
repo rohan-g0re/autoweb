@@ -431,3 +431,105 @@ def test_a_lane_is_told_not_to_use_the_orchestrators_browser(tmp_path):
     body = lane_markdown(1, config_at(tmp_path))
     assert "mcp__playwright__*" in body
     assert "mcp__lane1__" in body
+
+
+def test_permission_ownership_does_not_reach_other_mcp_servers(tmp_path):
+    """`mcp__lane<digits>` is the whole of what sync owns.
+
+    An over-greedy pattern here would retire the user's other MCP grants, which is how
+    a tool that was working yesterday starts asking for approval today.
+    """
+    cfg = config_at(tmp_path, "[lanes]\nmax = 1\n")
+    path = tmp_path / LOCAL_SETTINGS_PATH
+    path.parent.mkdir(parents=True)
+    keep = ["mcp__playwright__browser_navigate", "mcp__playwright", "mcp__laneX",
+            "mcp__lane1__browser_click", "mcp__tiger__db_schema", "Bash(ls)"]
+    path.write_text(json.dumps({"permissions": {"allow": list(keep)}}), encoding="utf-8")
+    sync_permissions(cfg)
+    allow = json.loads(path.read_text(encoding="utf-8"))["permissions"]["allow"]
+    for rule in keep:
+        assert rule in allow, f"sync retired a rule it does not own: {rule}"
+
+
+def test_a_settings_file_we_cannot_decode_is_never_silently_replaced(tmp_path):
+    """UTF-16 is what PowerShell's `>` writes by default. Decoding it as empty would
+    replace every permission, hook and model the user had with lane rules alone."""
+    cfg = config_at(tmp_path)
+    path = tmp_path / LOCAL_SETTINGS_PATH
+    path.parent.mkdir(parents=True)
+    original = json.dumps({"permissions": {"allow": ["Bash(ls)"]}, "model": "opus"})
+    path.write_bytes(original.encode("utf-16"))
+    with pytest.raises(LaneError, match="not UTF-8"):
+        sync_permissions(cfg)
+    assert path.read_bytes() == original.encode("utf-16"), "the file was modified"
+
+
+def test_a_byte_order_mark_is_tolerated(tmp_path):
+    """Notepad writes one. config.py already reads TOML with utf-8-sig, so a user who
+    edits one file in Notepad and not the other should not see different behaviour."""
+    cfg = config_at(tmp_path, "[lanes]\nmax = 1\n")
+    path = tmp_path / LOCAL_SETTINGS_PATH
+    path.parent.mkdir(parents=True)
+    path.write_bytes(json.dumps({"model": "opus"}).encode("utf-8-sig"))
+    sync_permissions(cfg)
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    assert data["model"] == "opus"
+    assert "mcp__lane1" in data["permissions"]["allow"]
+
+
+def test_granting_twice_does_not_rewrite_the_file(tmp_path):
+    """It is the user's file. A no-op run should not reformat it or touch its mtime."""
+    cfg = config_at(tmp_path, "[lanes]\nmax = 2\n")
+    path = tmp_path / LOCAL_SETTINGS_PATH
+    sync_permissions(cfg)
+    before = path.read_bytes(), path.stat().st_mtime_ns
+    sync_permissions(cfg)
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+def test_a_lane_body_tells_the_truth_about_how_it_is_seeded(tmp_path):
+    """Both halves, because inverting the condition passes a test that checks one.
+
+    A persistent lane told it starts logged in goes hunting for a session it does not
+    have; an isolated lane told to expect its own profile ignores the identity it was
+    given.
+    """
+    iso = tmp_path / "iso"
+    iso.mkdir()
+    body = lane_markdown(1, config_at(iso))
+    assert "root.json" in body
+    assert "starts logged out" not in body
+
+    persistent = tmp_path / "persistent"
+    persistent.mkdir()
+    body = lane_markdown(1, config_at(persistent, "[lanes]\nisolated = false\n"))
+    assert "starts logged out" in body
+    assert "own profile on disk" in body
+
+
+def test_a_non_object_settings_file_is_a_clear_error(tmp_path):
+    cfg = config_at(tmp_path)
+    path = tmp_path / LOCAL_SETTINGS_PATH
+    path.parent.mkdir(parents=True)
+    path.write_text("[1, 2]", encoding="utf-8")
+    with pytest.raises(LaneError, match="expected a JSON object"):
+        sync_permissions(cfg)
+
+
+def test_a_settings_file_with_a_non_object_permissions_key_is_a_clear_error(tmp_path):
+    cfg = config_at(tmp_path)
+    path = tmp_path / LOCAL_SETTINGS_PATH
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"permissions": "all"}), encoding="utf-8")
+    with pytest.raises(LaneError, match="not an object"):
+        sync_permissions(cfg)
+
+
+def test_a_settings_file_whose_allow_is_not_a_list_is_a_clear_error(tmp_path):
+    cfg = config_at(tmp_path)
+    path = tmp_path / LOCAL_SETTINGS_PATH
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"permissions": {"allow": "everything"}}),
+                    encoding="utf-8")
+    with pytest.raises(LaneError, match="not a list"):
+        sync_permissions(cfg)

@@ -277,9 +277,27 @@ def sync_permissions(cfg: Config, root: Path | None = None) -> list[str]:
     wanted = [f"mcp__{server_name(i)}" for i in range(1, cfg.lanes.max + 1)]
 
     data: dict = {}
+    raw = ""
     if path.exists():
+        # Not `_read`. That helper answers "is this file ours to touch" and
+        # treats anything unreadable as empty, which is the safe answer for a
+        # lane file and the destructive one here: a UTF-16 settings file, which
+        # is what PowerShell's `>` writes by default, would decode as nothing
+        # and we would replace every permission, hook and model the user had
+        # set with lane rules alone.
         try:
-            data = json.loads(_read(path) or "{}")
+            # utf-8-sig for the BOM Notepad writes, as config.py reads TOML.
+            raw = path.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise LaneError(
+                f"{path}: not UTF-8, so lane permissions cannot be granted "
+                f"without discarding what is already in the file. Re-save it "
+                f"as UTF-8 ({exc.reason})."
+            ) from exc
+        except OSError as exc:
+            raise LaneError(f"{path}: cannot read: {exc}") from exc
+        try:
+            data = json.loads(raw) if raw.strip() else {}
         except json.JSONDecodeError as exc:
             raise LaneError(f"{path}: not valid JSON, so lane permissions cannot be "
                             f"granted: {exc}") from exc
@@ -303,8 +321,14 @@ def sync_permissions(cfg: Config, root: Path | None = None) -> list[str]:
             kept.append(rule)
     permissions["allow"] = kept
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _write(path, json.dumps(data, indent=2) + "\n")
+    body = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    if path.exists() and raw == body:
+        return wanted          # nothing to change; leave the file alone
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise LaneError(f"{path}: cannot create the directory for it: {exc}") from exc
+    _write(path, body)
     return wanted
 
 
