@@ -115,7 +115,8 @@ def _cmd_state_export(args: argparse.Namespace) -> int:
         print("  note: no IndexedDB was captured. Fine if this site keeps its session "
               "in cookies; suspicious if it uses Firebase, Supabase or Auth0.")
     print()
-    print(f"  verify it:  autoweb state verify {args.url}")
+    suffix = "" if not args.out else f" {summary.path}"
+    print(f"  verify it:  autoweb state verify {args.url}{suffix}")
     return 0
 
 
@@ -134,7 +135,8 @@ def _cmd_state_inspect(args: argparse.Namespace) -> int:
     for origin in summary.origins:
         if not args.all and not origin.carries_session:
             continue
-        print(f"  {origin.origin[:48]:<48} {origin.cookies:>7} "
+        shown = (origin.origin[:47] + "~") if len(origin.origin) > 48 else origin.origin
+        print(f"  {shown:<48} {origin.cookies:>7} "
               f"{origin.local_storage_keys:>4} {origin.indexeddb_stores:>4} "
               f"{origin.bytes:>9}")
 
@@ -150,21 +152,45 @@ def _cmd_state_inspect(args: argparse.Namespace) -> int:
 
 
 def _cmd_state_verify(args: argparse.Namespace) -> int:
-    """Seed a brand new browser from the state file and see whether it is logged in.
+    """Seed a brand new browser from the state file and check whether it stayed logged in.
 
     The only honest test of an export. A file that parses proves nothing; a fresh
     browser that loads the page as you proves it worked.
+
+    Exits non-zero when the session did not survive, so this is usable as a gate.
+    Redirection is the default signal, because sites bounce unauthenticated requests
+    to a login page and frequently serve the same ``<title>`` on both.
     """
     cfg = Config.load(args.dir)
     path = Path(args.path).resolve() if args.path else cfg.root_state_path
 
-    title = state.seeded_context_check(
-        path, args.url, browser=cfg.lanes.browser, indexeddb=cfg.state.indexeddb)
+    result = state.seeded_context_check(path, args.url, browser=cfg.lanes.browser)
+
     print(f"seeded a fresh isolated browser from {path}")
-    print(f"  {args.url} -> {title!r}")
+    print(f"  requested : {args.url}")
+    print(f"  landed on : {result.final_url}")
+    print(f"  status    : {result.status if result.status is not None else 'unknown'}")
+    print(f"  title     : {result.title!r}")
     print()
-    print("  Read the title: if it names a login or sign-in page, the session did not "
-          "survive the round trip.")
+
+    failures = []
+    if args.expect_url and args.expect_url not in result.final_url:
+        failures.append(f"expected the URL to contain {args.expect_url!r}")
+    # Checked against the title only; a body check would need the page kept open.
+    if args.expect_text and args.expect_text.lower() not in result.title.lower():
+        failures.append(f"expected the title to contain {args.expect_text!r}")
+    # With no explicit assertion, fall back to the one signal that is almost always
+    # right: a site that bounced you somewhere else logged you out.
+    if (not args.expect_url and not args.expect_text
+            and result.final_url.rstrip("/") != args.url.rstrip("/")):
+        failures.append("the browser was redirected, which usually means logged out")
+
+    if failures:
+        for failure in failures:
+            print(f"  FAIL: {failure}", file=sys.stderr)
+        return 1
+
+    print("  OK: the session survived the round trip.")
     return 0
 
 
@@ -228,6 +254,10 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("url", help="page to load, e.g. https://example.com")
     verify.add_argument("path", nargs="?", default=None,
                         help="state file (default: state.root from config)")
+    verify.add_argument("--expect-url", default=None, metavar="SUBSTRING",
+                        help="fail unless the final URL contains this")
+    verify.add_argument("--expect-text", default=None, metavar="SUBSTRING",
+                        help="fail unless the page title contains this")
     verify.set_defaults(func=_cmd_state_verify)
 
     st.set_defaults(func=lambda a: (st.print_help(), 1)[1])

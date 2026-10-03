@@ -58,7 +58,14 @@ scratch/
 personal_docs/
 runs/
 # --- autoweb runtime ---
+# Identity material. These hold live session cookies, so the globs cover every
+# file save() can produce: the state itself, the .bak it keeps when replacing one,
+# and the .tmp it writes before renaming. A crash mid-write leaves the .tmp behind,
+# and `git add .` after two exports would otherwise publish a session.
 .autoweb/
 root.json
+root.json.*
 lane-*.json
+lane-*.json.*
+*.storagestate.json
 .venv/

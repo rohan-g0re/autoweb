@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigError
+from .config import ConfigError, _host_of
 
 
 class StateError(Exception):
@@ -120,47 +120,77 @@ def save(path: Path, state: dict[str, Any]) -> None:
 
 
 def summarise(path: Path, state: dict[str, Any] | None = None) -> StateSummary:
-    """Measure a state file: per-origin cookies, localStorage keys, IndexedDB stores."""
+    """Measure a state file: per-origin cookies, localStorage keys, IndexedDB stores.
+
+    Origins are keyed by host, not by the origin string, so a site visited over both
+    http and https, or on two ports, counts once. Counting them separately would
+    inflate the ``max_origins`` cap and attribute the same cookies repeatedly.
+    """
     state = state if state is not None else load(path)
 
     cookies_by_host: dict[str, int] = {}
     for cookie in state.get("cookies", []):
         if not isinstance(cookie, dict):
             continue
-        host = str(cookie.get("domain", "")).lstrip(".").lower()
-        cookies_by_host[host] = cookies_by_host.get(host, 0) + 1
+        domain = cookie.get("domain")
+        if not isinstance(domain, str):
+            continue
+        # Cookie domains carry a leading dot to mean "and subdomains"; origins never
+        # do. Strip it so `.example.com` and `https://example.com` are one host.
+        host = _host_of(domain.lstrip("."))
+        if host:
+            cookies_by_host[host] = cookies_by_host.get(host, 0) + 1
 
-    summaries: list[OriginSummary] = []
-    seen_hosts: set[str] = set()
+    # Merge by host so duplicates collapse instead of each claiming the host's cookies.
+    by_host: dict[str, dict[str, Any]] = {}
     for entry in state.get("origins", []):
         if not isinstance(entry, dict):
             continue
-        origin = str(entry.get("origin", ""))
-        host = origin.split("://")[-1].split("/")[0].split(":")[0].lower()
-        seen_hosts.add(host)
+        origin = entry.get("origin")
+        if not isinstance(origin, str) or not origin.strip():
+            continue
+        host = _host_of(origin)
+        if not host:
+            continue
         local = entry.get("localStorage") or []
         idb = entry.get("indexedDB") or []
-        summaries.append(OriginSummary(
-            origin=origin,
+        acc = by_host.setdefault(host, {"origin": origin, "ls": 0, "idb": 0, "bytes": 0})
+        acc["ls"] += len(local) if isinstance(local, list) else 0
+        acc["idb"] += len(idb) if isinstance(idb, list) else 0
+        acc["bytes"] += len(json.dumps(entry))
+
+    summaries = [
+        OriginSummary(
+            origin=acc["origin"],
             cookies=cookies_by_host.get(host, 0),
-            local_storage_keys=len(local) if isinstance(local, list) else 0,
-            indexeddb_stores=len(idb) if isinstance(idb, list) else 0,
-            bytes=len(json.dumps(entry)),
-        ))
+            local_storage_keys=acc["ls"],
+            indexeddb_stores=acc["idb"],
+            bytes=acc["bytes"],
+        )
+        for host, acc in by_host.items()
+    ]
 
     # Cookie-only hosts never appear in `origins`, and they are often the whole
     # session. Listing them keeps the origin count honest.
-    for host, count in sorted(cookies_by_host.items()):
-        if host and host not in seen_hosts:
-            summaries.append(OriginSummary(
-                origin=host, cookies=count, local_storage_keys=0,
-                indexeddb_stores=0, bytes=0,
-            ))
+    summaries.extend(
+        OriginSummary(origin=host, cookies=count, local_storage_keys=0,
+                      indexeddb_stores=0, bytes=0)
+        for host, count in sorted(cookies_by_host.items())
+        if host not in by_host
+    )
 
     summaries.sort(key=lambda s: (-s.bytes, -s.cookies, s.origin))
+
+    # Measure the file as written, because caps.total_bytes is documented as the
+    # maximum size of root.json and that is what a reader will check with `ls`.
+    try:
+        total = path.stat().st_size
+    except OSError:
+        total = len(json.dumps(state, indent=2)) + 1
+
     return StateSummary(
         path=path,
-        total_bytes=len(json.dumps(state)),
+        total_bytes=total,
         cookies=len([c for c in state.get("cookies", []) if isinstance(c, dict)]),
         origins=tuple(summaries),
     )
@@ -185,39 +215,31 @@ def export_interactive(
     your day-to-day profile would lock it, and on Windows a second Chrome on the same
     profile fails silently (exit 0 or 21, no error) - see ``docs/CONSTRAINTS.md``.
     """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ModuleNotFoundError as exc:  # pragma: no cover - dependency is declared
-        raise StateError(
-            "playwright is not installed. Run: uv sync"
-        ) from exc
-
-    launch_args: dict[str, Any] = {"headless": False}
-    # 'chromium' means Playwright's bundled build, which has no channel.
-    if browser != "chromium":
-        launch_args["channel"] = browser
-
-    with sync_playwright() as pw:
-        try:
-            instance = pw.chromium.launch(**launch_args)
-        except Exception as exc:
-            raise StateError(
-                f"could not launch '{browser}': {exc}\n"
-                f"If Chrome is not installed, set lanes.browser = \"chromium\" in "
-                f"autoweb.toml and run: npx playwright install chromium"
-            ) from exc
-
+    pw_api = _playwright()
+    with pw_api() as pw:
+        instance = _launch(pw, browser, headless=False)
         context = instance.new_context()
         context.set_default_timeout(timeout_seconds * 1000)
         page = context.new_page()
-        page.goto(url, wait_until="domcontentloaded")
+        _goto(page, url, timeout_seconds)
 
         print()
         print(f"  A browser window is open at {url}")
         print("  Log in there by hand. Take as long as you need.")
         print("  AutoWeb does not see your password; it only reads the session after.")
         print()
-        wait_for_enter("  Press Enter here once you are logged in... ")
+        try:
+            wait_for_enter("  Press Enter here once you are logged in... ")
+        except EOFError as exc:
+            # Non-interactive stdin: a pipe, a CI job, `< /dev/null`. There is no
+            # human to log in, so there is nothing to capture.
+            context.close()
+            instance.close()
+            raise StateError(
+                "'state export' needs an interactive terminal: a human has to log in "
+                "before there is a session to capture. Run it by hand, not from a "
+                "pipe or a CI job."
+            ) from exc
 
         state = context.storage_state(indexed_db=indexeddb)
         context.close()
@@ -227,39 +249,99 @@ def export_interactive(
     return summarise(out, state)
 
 
+@dataclass(frozen=True)
+class SeedResult:
+    """What a fresh browser saw when seeded from a state file."""
+
+    title: str
+    final_url: str
+    status: int | None
+
+
 def seeded_context_check(state_path: Path, url: str, *, browser: str = "chrome",
-                         indexeddb: bool = True) -> str:
-    """Open a fresh isolated browser seeded from *state_path* and return the page title.
+                         timeout_seconds: int = 60) -> SeedResult:
+    """Open a fresh isolated browser seeded from *state_path* and report what it saw.
 
     This is the honest test of an export: a brand new browser, nothing on disk, given
     only the JSON. If it is still logged in, the export captured what mattered.
+
+    Returns the final URL as well as the title, because a title proves very little.
+    Plenty of sites serve the same ``<title>`` on their login page and their secure
+    area, and only the URL reveals that you were bounced.
     """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ModuleNotFoundError as exc:  # pragma: no cover
-        raise StateError("playwright is not installed. Run: uv sync") from exc
+    load(state_path)        # reject anything that is not storageState-shaped, with a
+                            # message, rather than letting Playwright raise mid-launch
 
-    if not state_path.is_file():
-        raise StateError(f"{state_path}: no state file to seed from")
-
-    launch_args: dict[str, Any] = {"headless": True}
-    if browser != "chromium":
-        launch_args["channel"] = browser
-
-    with sync_playwright() as pw:
-        instance = pw.chromium.launch(**launch_args)
+    pw_api = _playwright()
+    with pw_api() as pw:
+        instance = _launch(pw, browser, headless=True)
         context = instance.new_context(storage_state=str(state_path))
         page = context.new_page()
-        page.goto(url, wait_until="domcontentloaded")
-        title = page.title()
+        response = _goto(page, url, timeout_seconds)
+        result = SeedResult(
+            title=page.title(),
+            final_url=page.url,
+            status=response.status if response is not None else None,
+        )
         context.close()
         instance.close()
-    return title
+    return result
+
+
+# --- browser plumbing --------------------------------------------------------
+#
+# Playwright raises its own exception types from deep inside the driver. Letting
+# those reach the CLI means a traceback for an unreachable host or an expired
+# certificate, neither of which is a bug in AutoWeb. Everything below converts them
+# into StateError so the user gets one line and exit 2.
+
+
+def _playwright():
+    try:
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError as exc:  # pragma: no cover - dependency is declared
+        raise StateError("playwright is not installed. Run: uv sync") from exc
+    return sync_playwright
+
+
+def _launch(pw, browser: str, *, headless: bool):
+    """Launch *browser*, routing non-Chromium engines to their own browser type."""
+    try:
+        if browser == "firefox":
+            return pw.firefox.launch(headless=headless)
+        if browser == "webkit":
+            return pw.webkit.launch(headless=headless)
+        # 'chromium' is Playwright's bundled build and takes no channel; 'chrome'
+        # and 'msedge' are Chromium channels pointing at an installed browser.
+        args: dict[str, Any] = {"headless": headless}
+        if browser != "chromium":
+            args["channel"] = browser
+        return pw.chromium.launch(**args)
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else str(exc)
+        hint = (
+            "Install it with: uv run playwright install chromium"
+            if browser == "chromium"
+            else f"If {browser} is not installed, set lanes.browser = \"chromium\" in "
+                 f"autoweb.toml and run: uv run playwright install chromium"
+        )
+        raise StateError(f"could not launch '{browser}': {first_line}\n  {hint}") from exc
+
+
+def _goto(page, url: str, timeout_seconds: int):
+    """Navigate, converting Playwright's errors into something actionable."""
+    try:
+        return page.goto(url, wait_until="domcontentloaded",
+                         timeout=timeout_seconds * 1000)
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else str(exc)
+        raise StateError(f"could not load {url}: {first_line}") from exc
 
 
 __all__ = [
     "ConfigError",
     "OriginSummary",
+    "SeedResult",
     "StateError",
     "StateSummary",
     "export_interactive",

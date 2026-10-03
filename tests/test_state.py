@@ -172,3 +172,115 @@ def test_malformed_entries_are_skipped_not_fatal(tmp_path):
     summary = summarise(write_state(tmp_path, data))
     assert summary.cookies == 1
     assert len(summary.origins) == 1
+
+
+# --- regressions from the Phase 2 Fable gate --------------------------------
+
+
+def test_duplicate_origins_on_one_host_collapse(tmp_path):
+    """http and https on one site is one identity, not two.
+
+    Counting them separately inflated the max_origins cap and gave every row the
+    host's full cookie count, so per-row totals exceeded the actual total.
+    """
+    data = {
+        "cookies": [{"name": "a", "value": "1", "domain": "dup.test", "path": "/"}],
+        "origins": [
+            {"origin": "https://dup.test", "localStorage": [{"name": "k", "value": "v"}]},
+            {"origin": "http://dup.test", "localStorage": []},
+            {"origin": "https://dup.test:8443", "localStorage": []},
+        ],
+    }
+    summary = summarise(write_state(tmp_path, data))
+    assert len(summary.origins) == 1
+    assert sum(o.cookies for o in summary.origins) == summary.cookies
+
+
+def test_ipv6_origin_is_parsed_not_mangled(tmp_path):
+    """`http://[::1]:8080` used to parse to the host `[`, orphaning its cookie."""
+    data = {
+        "cookies": [{"name": "a", "value": "1", "domain": "[::1]", "path": "/"}],
+        "origins": [{"origin": "http://[::1]:8080", "localStorage": []}],
+    }
+    summary = summarise(write_state(tmp_path, data))
+    assert len(summary.origins) == 1
+    assert summary.origins[0].cookies == 1
+
+
+def test_cookie_with_non_string_domain_is_ignored(tmp_path):
+    """A null domain became an origin literally named 'none'."""
+    data = {"cookies": [{"name": "a", "value": "1", "domain": None, "path": "/"}],
+            "origins": []}
+    summary = summarise(write_state(tmp_path, data))
+    assert summary.origins == ()
+
+
+def test_origin_entry_without_an_origin_is_ignored(tmp_path):
+    """A missing `origin` key rendered as a blank row."""
+    summary = summarise(write_state(tmp_path, {"cookies": [], "origins": [{"ls": []}]}))
+    assert summary.origins == ()
+
+
+def test_total_bytes_is_the_file_size(tmp_path):
+    """caps.total_bytes is documented as the size of root.json, so measure the file.
+
+    It previously reported compact-JSON length, which is smaller than the indented
+    file actually written - the cap and the label described different numbers.
+    """
+    path = tmp_path / "root.json"
+    save(path, SAMPLE)
+    assert summarise(path).total_bytes == path.stat().st_size
+
+
+def test_seeded_check_rejects_a_non_state_file_before_launching(tmp_path):
+    """`verify` accepted files that `inspect` rejected, then failed inside Playwright.
+
+    The two commands must agree on what a state file is, and the rejection must not
+    cost a browser launch.
+    """
+    from autoweb.state import seeded_context_check
+
+    path = tmp_path / "root.json"
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+    with pytest.raises(StateError, match="storageState object"):
+        seeded_context_check(path, "https://example.com")
+
+
+def test_export_without_a_terminal_explains_itself(tmp_path, monkeypatch):
+    """Non-interactive stdin raised EOFError from input() with a traceback.
+
+    There is no human to log in, so there is nothing to capture; say that.
+    """
+    from autoweb.state import export_interactive
+
+    class FakePage:
+        url = "https://example.com"
+        def goto(self, *a, **k): return None
+        def title(self): return "x"
+
+    class FakeContext:
+        def new_page(self): return FakePage()
+        def set_default_timeout(self, *a): pass
+        def close(self): pass
+
+    class FakeBrowser:
+        def new_context(self, **k): return FakeContext()
+        def close(self): pass
+
+    class FakePW:
+        class chromium:
+            @staticmethod
+            def launch(**k): return FakeBrowser()
+
+    class FakeSync:
+        def __enter__(self): return FakePW()
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr("autoweb.state._playwright", lambda: (lambda: FakeSync()))
+
+    def eof(_prompt):
+        raise EOFError
+
+    with pytest.raises(StateError, match="interactive terminal"):
+        export_interactive(tmp_path / "root.json", "https://example.com",
+                           wait_for_enter=eof)
