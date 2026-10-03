@@ -174,8 +174,20 @@ Default/Web Data
 Local State                      ← root, holds os_crypt.encrypted_key
 ```
 
-sqlite files need their `-wal` / `-shm` / `-journal` siblings. **Exclude** `lockfile`,
+**Correction on SQLite mode:** Chrome's databases are mostly **not** WAL — `sql/database.h`
+defaults `wal_mode_ = false`, and `Cookies`, `Login Data` and `Favicons` use a rollback
+journal (you can confirm by the 0-byte `Cookies-journal` sitting next to them). Carrying
+`-wal`/`-shm` siblings costs nothing, but they are not the live risk. **Exclude** `lockfile`,
 `Singleton*`, every LevelDB `LOCK`, and caches.
+
+**`Local State` is load-bearing and looks like junk.** 6 KB of JSON at the profile root
+holding `os_crypt.encrypted_key` — the AES-256-GCM key for every cookie, DPAPI-wrapped.
+Omit it and Chromium mints a fresh key, fails to decrypt every `v10` row, and **drops the
+cookies with no error**. The profile looks healthy and is logged out of everything.
+
+**Windows locks `Network/Cookies` while Chrome runs** — a read attempt returns
+`PermissionError: [Errno 13]`. Copy-while-running is not available; close the browser or
+go through `storageState()`.
 
 Locked-file escape hatch (VSS, no admin): `esentutl.exe /y <src> /d <dst> /o`
 

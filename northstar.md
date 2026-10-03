@@ -1,6 +1,6 @@
-- connect playwright mcp
-- test if it can make open browser && take actions
-- can it take action based on the url and "goal" as given
+- [x] connect playwright mcp
+- [x] test if it can make open browser && take actions
+- [x] can it take action based on the url and "goal" as given
 - browser profile saving
 - browser profile parallel spawns
 - browser profile "merge profile" after each parallel spawns ends (so that profile always stays updated)

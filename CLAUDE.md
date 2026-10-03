@@ -64,12 +64,32 @@ These are load-bearing. Violating them is how this becomes another framework.
 | | |
 |---|---|
 | Engine | Claude Code |
-| Browser | `@playwright/mcp` over stdio |
+| Browser | `@playwright/mcp@0.0.83` over stdio, project-scoped `.mcp.json`, zero flags |
 | Language | Python (decided; TS only behind MCP or a CLI) |
 | Code | none yet, by design |
-| Done | nothing verified |
+| Done | northstar lines 1–3 — connected, acting, and acting from a goal alone |
 
 `northstar.md` is the task list and the source of truth for sequencing.
+
+### What "lines 1–3 proven" means
+
+**Lines 1–2.** `navigate` → `snapshot` → `click` (by snapshot `ref`) → `snapshot` →
+`screenshot` → `close`, against `example.com` through to `iana.org`. Clean teardown, no
+errors, no profile or lock messages, screenshot verified by eye rather than by the tool
+reporting success.
+
+**Line 3.** `goals/daily-digest.md` handed to a Sonnet worker with **no steps given**.
+It chose its own route across Yahoo Finance, google.com, doodles.google, Medium and
+Typefully; wrote its own deliverable to `runs/`; and produced its own assertion table.
+53 browser calls. Result was 4 PASS / 1 FAIL — and the FAIL is why it counts: no Google
+Doodle existed that day, and it reported that rather than passing off a plain-logo
+screenshot as one. It also found a real Typefully bug (bolding a selection over ~80
+characters drops a space at the cut point), reproduced it, and worked around it in the
+open.
+
+Note on scope: `playwright` is also defined at user scope on the author's machine with
+a `--user-data-dir`. Project scope wins here, and `claude mcp list` reports the
+collision. The repo does not depend on the user-scope entry.
 
 ## Vocabulary
 
