@@ -62,6 +62,8 @@ flagless `.mcp.json`. `--help` advertises only `vision, pdf, devtools` for `--ca
 definition and the filter, and has **not** been confirmed against a live tool listing
 from a server started with `--caps=storage`.
 
+  **Confirmed live.** `tools/list` over stdio against `@playwright/mcp@0.0.83 --isolated` returns **25** tools; adding `--caps=storage` returns **42**, and the difference is exactly the 17 storage tools named above. So the undocumented capability is accepted and works. The 25 also confirms the figure quoted for a zero-flag server.
+
 Gone: `browser_install` (now `cli.js install-browser`), `--save-trace`,
 `--save-video` (removed ~0.0.60 — use `--caps=devtools`). `--save-session` still
 exists.
@@ -252,7 +254,7 @@ Official position, dgozman: *"browsers do not allow that… This is by design."*
 
 Always: cookies + localStorage.
 Opt-in: `indexedDB: true` (1.51+), `opfs: true` (1.63), `credentials: true` (1.61).
-**Never**: sessionStorage (no API — workaround is `page.evaluate` + `addInitScript`),
+**Never via `storageState`**: sessionStorage. It is absent from the serialised state, and the library workaround is `page.evaluate` plus `addInitScript`. With `--caps=storage` the MCP server does expose `browser_sessionstorage_list` and friends, so reading it per origin is possible without leaving MCP; what is not possible is getting it out as part of a storageState file,
 service-worker / Cache API, HTTP auth (use `httpCredentials`), Chrome's Login Data
 and autofill.
 

@@ -28,7 +28,7 @@ the seam sits**, and the rule is: *there is exactly one seam.*
 - **Python owns** the loop, the config, the CLI, and every `.md` artifact.
 - **TypeScript appears only** where the real Playwright API is required and the MCP
   tool surface is not enough — `page.frameLocator`, `pressSequentially`,
-  `addInitScript` (the only way to capture sessionStorage),
+  `addInitScript`,
   `storageState({indexedDB: true})`.
 - **A TS module is reached through MCP stdio or a JSON-in/JSON-out CLI subprocess.**
   Never imported. Never FFI, never node-gyp, never a Python package vendoring a Node
