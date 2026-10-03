@@ -112,8 +112,8 @@ Everything finalised, in one place. Decisions only — the reasoning lives in
 
 - `autoweb.toml` — what a human sets.
 - separate JSON — what the loop learns. keep hand-authored and machine-authored apart.
-- per-origin: `indexedDB` (default OFF), `rotates` (-> single-lane only), `sticky`
-  (never evict).
+- per-origin: `indexeddb` (inherits `state.indexeddb`), `rotates` (-> single-lane
+  only), `sticky` (never evict). `state.indexeddb` defaults ON: off loses most logins.
 - caps: total bytes, max origins, max IndexedDB stores per origin. hitting a cap is LOUD.
 
 # Infra

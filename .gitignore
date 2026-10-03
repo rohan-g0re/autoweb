@@ -57,3 +57,8 @@ scratch/
 *.local
 personal_docs/
 runs/
+# --- autoweb runtime ---
+.autoweb/
+root.json
+lane-*.json
+.venv/

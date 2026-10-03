@@ -1,0 +1,29 @@
+# AutoWeb configuration.
+#
+# Every option here has a working default — this file exists so you can see what is
+# adjustable, not because anything must be set. Delete any line to take the default.
+# Options are documented at their definition in src/autoweb/config.py.
+
+[lanes]
+max = 5              # ceiling on concurrent lanes, never a target
+browser = "chrome"   # set to "chromium" on ARM Linux — Google ships no Chrome there
+mcp_version = "0.0.83"
+isolated = true      # nothing written to disk; what makes lanes safe in parallel
+
+[state]
+root = "root.json"   # the base storageState every lane starts from
+indexeddb = true     # false quietly loses Firebase/Supabase/Auth0 logins
+
+[caps]
+# A safety valve, not a selection policy. Hitting one should be loud.
+total_bytes = 2000000
+max_origins = 50
+max_indexeddb_per_origin = 5
+
+# Per-origin overrides. Most entries are written by the loop into
+# .autoweb/learned.json; anything you set here wins over what it learned.
+#
+# [origins."example.com"]
+# indexeddb = false   # this site's IndexedDB is large and worthless
+# rotates   = true    # rotates tokens -> only ONE lane may hold it
+# sticky    = true    # never evict; dropping it forces a re-login
