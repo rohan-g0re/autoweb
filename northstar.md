@@ -8,11 +8,20 @@
 - [x] browser profile parallel spawns. `autoweb lanes sync` generates one agent file per
   lane, each declaring its own inline MCP server so it gets its own server process, its
   own browser and its own current tab. Three independent gates, the first two of which
-  failed on lanes that silently shared one browser. Proven: four lanes dispatched at once
-  held four concurrent browsers for a thirty second overlap, each still on its own page,
-  no lane touching another's tools, and a session told nothing about lanes found and used
-  them unaided. Owed: a run seeded with a real identity instead of an empty storageState.
+  failed on lanes that silently shared one browser. Proven on Arch against a real
+  LinkedIn identity exported to a 1.5 MB `root.json`: one assistant message dispatched
+  four lanes, a process outside the run counted four distinct `--user-data-dir` values
+  held for 44 seconds, and `autoweb trace` put all four alive together for 21.6s. No
+  lane drifted onto another's page, all four stayed logged in with no authwall, and
+  `li_at` and `JSESSIONID` were byte-identical across `root.json` and all four lane
+  files. The dispatching session was a fresh `claude -p` told nothing about lanes.
 - browser profile "merge profile" after each parallel spawns ends (so that profile always stays updated)
+  - Stands: the merge code exists and is tested, and a dry run against real four-lane
+    output caught the merge signing `root.json` out of LinkedIn — whole-origin eviction
+    fired on per-browser bot-management cookies (`__cf_bm`, `_px3`, `pxcts`,
+    `__Secure-3PSIDCC`) and took it to zero origins on a successful read-only run. That
+    is fixed. Owed: a merge written to `root.json`, and an identity that still works
+    after it.
 
 
 - command: **SIMULATION**
