@@ -96,6 +96,51 @@ isolation and anything it says about which page it was on is unreliable. Treat t
 as void: re-dispatch the work rather than reconciling the results, and if several lanes
 did it, re-dispatch them one at a time.
 
+## Harvest before anything closes, then merge once
+
+The decision to end a lane is not the same event as the lane ending, and everything worth
+keeping has to be taken in the gap between them. An `--isolated` lane holds its profile in
+memory only, so once its browser is gone there is nothing left on disk to read.
+
+So the last thing you ask a lane to do, before it finishes, is save its own state:
+
+> Before you finish, call `browser_storage_state` with `filename` set to
+> `lane-<your number>.json`. Do this as your final action, after everything else, and
+> report the path it wrote.
+
+Then, once **every** lane has reported and none is still running:
+
+```sh
+autoweb merge lane-1.json lane-3.json --dry-run    # read the decisions first
+autoweb merge lane-1.json lane-3.json              # writes root.json, keeps a .bak
+```
+
+One writer, after every lane is dead. Two merges racing on `root.json` is how you get a
+file that is valid JSON and nobody's session.
+
+Read the dry run rather than skipping to the write. It prints a line per origin, and the
+line you are looking for is `evicted`: that means two lanes changed the same value to
+different things, so one of them is holding a token the server has already rotated away.
+The merge drops that origin rather than guessing, and you will have to log in to it again.
+That is the cheap outcome. Writing the wrong token back can present a retired credential,
+and a server that treats that as a replay attack is entitled to revoke the whole family,
+signing you out everywhere including the identity the lanes came from.
+
+A `warning:` about a rotating site touched by more than one lane means the decomposition
+was wrong, not the merge. Fix it by giving that site one lane next time.
+
+### What the merge will not do
+
+It never propagates a deletion, because a lane that lacks a cookie almost always never
+visited that site rather than having logged out of it. It never lets an empty IndexedDB
+overwrite a real one, because `indexedDB: []` means "nobody harvested this" as often as it
+means "this is empty" and the file cannot tell you which. Both rules mean a lane that
+failed quietly cannot subtract from the shared identity, which is the property you want
+when the alternative is eroding a login a little on every run.
+
+A cap being hit is an error and nothing is written. That is deliberate: trimming origins
+to fit would make which login survives depend on dictionary ordering.
+
 ## Read what comes back
 
 A lane reports what it did, what it found, and the URL behind every fact. Treat a
@@ -114,6 +159,10 @@ actually loaded the page.
 - Each lane was given a checkable assertion rather than a request.
 - No lane reported using `mcp__playwright__*`; any that did was re-dispatched.
 - Results name their sources, and blocked work is reported as blocked.
+- Every lane saved its own state with `browser_storage_state` as its last action,
+  before its browser closed.
+- The merge ran once, after every lane was finished, and its `evicted` lines were
+  read rather than skipped.
 
 ## If there are no lanes
 

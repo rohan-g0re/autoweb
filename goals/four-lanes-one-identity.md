@@ -88,6 +88,22 @@ succeed.
    another lane's `T0_start`, those two ran in sequence and the run failed its main
    assertion.
 
+## Last action, before you finish
+
+After the timestamps and before reporting, each agent saves its own browser state by
+calling `browser_storage_state` with `filename` set to `lane-<its number>.json`, and
+reports the path it wrote.
+
+This has to be the final action. An isolated browser keeps its profile in memory only, so
+once it closes there is nothing left on disk to read, and the gap between deciding to stop
+and actually stopping is the only chance to keep anything.
+
+Nothing in these four tasks changes a session on purpose, so the expectation is that these
+files differ from the starting identity very little. That is the point: a merge whose
+inputs should be near-identical is the honest first test of one, because anything it
+reports as changed is either a real token rotation by the site or a bug, and both are worth
+knowing.
+
 ## Reporting
 
 Give one table of the four tasks' answers, one table of the sixteen timestamps, and then
