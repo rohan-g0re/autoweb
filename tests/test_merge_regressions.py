@@ -537,8 +537,9 @@ def test_the_object_and_string_encodings_of_one_partition_still_agree():
 
 
 def test_an_absent_ancestor_bit_means_true_not_a_third_value():
-    """Playwright's own semantics, read from the playwright-core bundle of 1.63: it writes
-    the field for every partitioned cookie on export and reads it as
+    """Playwright's own semantics, read from the playwright-core bundles of 1.63 and of
+    1.64, the version the lanes' MCP resolves: it writes the field for every partitioned
+    cookie on export and reads it as
     `_crHasCrossSiteAncestor ?? true` on import.
 
     This was briefly a third value on the reasoning that splitting one cookie into two is

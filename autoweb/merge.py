@@ -128,8 +128,9 @@ def _partition(cookie: dict[str, Any]) -> str:
     An absent bit on a partitioned cookie means **true**, which is Playwright's own
     semantics rather than a guess: it writes the field for every partitioned cookie on
     export, and on import reads it as `_crHasCrossSiteAncestor ?? true`. **Read from the
-    playwright-core bundle of playwright 1.63**; the lanes' MCP runs 1.64, where it has
-    not been re-checked.
+    playwright-core bundle of both playwright 1.63 and playwright-core 1.64**, the latter
+    being the copy the lanes' MCP actually resolves; the five relevant lines are
+    identical in the two.
 
     This was briefly a third value, "absent", on the reasoning that splitting one cookie
     into two is the recoverable direction. That reasoning is wrong here, and usefully so.

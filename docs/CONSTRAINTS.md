@@ -490,9 +490,13 @@ Two rules fall out, and they generalise past cookies:
   sorted keys" is a statement about JSON. The identity is a pair, and a sibling field is
   part of it.
 - **An absent `_crHasCrossSiteAncestor` means `true`.** **read-from-source**, the
-  playwright-core bundle of playwright 1.63: the field is written for every partitioned
-  cookie on export and read as `_crHasCrossSiteAncestor ?? true` on import. Not
-  re-checked on 1.64, which is what the lanes' MCP runs. In the measured export all 886
+  playwright-core bundles of both playwright 1.63 and playwright-core
+  `1.64.0-alpha-1790635538000` - the latter being the copy `npx @playwright/mcp@0.0.83`
+  resolves, so it is the one the lanes run. The field is written for every partitioned
+  cookie on export and read as `_crHasCrossSiteAncestor ?? true` on import, and the
+  relevant lines are identical in the two versions. Worth having checked both: a cookie
+  identity that changed between Playwright versions would mean one `root.json` meaning
+  different things to two lanes, which is worse than any defect found here. In the measured export all 886
   partitioned rows carried the field, so the absent case did not arise - but treating it
   as a third distinct value, which is the instinct, is wrong in a way worth naming: absent
   and true land in the *same* browser partition on seed, so one overwrites the other while
