@@ -191,6 +191,32 @@ and current tab. These things about that, all **live**:
   `message.id`. Three runs were written up as staggered on the strength of the wrong
   grouping, and the orchestrators had been right all along.
 
+- **An agent file's `mcpServers` are ignored unless the folder is trusted, and the
+  refusal is silent.** **live, on a fresh clone, and this is the one that costs you a
+  whole run.** Claude Code will not start the MCP servers declared in an agent file whose
+  definition came from an untrusted folder. From inside the run there is no error: the
+  lane starts, its browser tools are simply absent, and `ToolSearch` answers "No matching
+  deferred tools found". The real message appears only in a debug log:
+
+  ```
+  Skipping frontmatter MCP servers for agent 'lane-1': the folder its definition file
+  came from is not trusted (source: projectSettings)
+  ```
+
+  **`--dangerously-skip-permissions` does not bypass it.** Measured: on a fresh clone a
+  naive agent found the lanes unaided, dispatched four of them correctly in a single
+  message, and *zero* browsers ever started. The same code on a machine where the folder
+  had been trusted months earlier ran four concurrent browsers.
+
+  The trust flag lives in `~/.claude.json` under
+  `projects["<abs path>"].hasTrustDialogAccepted`, keyed with forward slashes on every
+  platform. `autoweb lanes sync` now checks it and says so, because a silent no-op that
+  looks like a broken feature is worth one explicit check. Fix it by running Claude Code
+  once in the folder and accepting the trust prompt.
+
+  This also explains an asymmetry that had been read as a Linux problem: it was never
+  about the platform, only about which folder had been trusted.
+
 - **Agent files are read once, at session startup.** **live.** `autoweb lanes sync`
   rewrote five lane files mid-session. A session that was already running kept serving
   the definitions it had cached, so four lanes dispatched from it connected to one

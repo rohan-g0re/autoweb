@@ -287,6 +287,53 @@ def sync(cfg: Config, root: Path | None = None) -> list[LaneFile]:
     return results
 
 
+CLAUDE_CONFIG_FILENAME = ".claude.json"
+
+
+def workspace_is_trusted(root: Path) -> bool | None:
+    """Whether Claude Code considers *root* a trusted folder.
+
+    **This decides whether lanes get browsers at all.** Claude Code refuses to start the
+    `mcpServers` declared in an agent file whose folder is untrusted, and it refuses
+    *silently* as far as the run is concerned: the lane starts, its browser tools are
+    simply absent, and `ToolSearch` answers "No matching deferred tools found". The error
+    only appears in a debug log:
+
+        Skipping frontmatter MCP servers for agent 'lane-1': the folder its definition
+        file came from is not trusted (source: projectSettings)
+
+    `--dangerously-skip-permissions` does not bypass it. Measured on a fresh clone, where
+    four lanes dispatched correctly and zero browsers ever started.
+
+    Returns True, False, or None when the question cannot be answered - no config file
+    yet, or one we cannot parse. None is reported as "cannot tell" rather than as
+    untrusted, because a false alarm teaches people to ignore the warning.
+    """
+    config = Path.home() / CLAUDE_CONFIG_FILENAME
+    try:
+        data = json.loads(config.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    projects = data.get("projects")
+    if not isinstance(projects, dict):
+        return None
+
+    # Keys are stored with forward slashes whatever the platform, and Windows paths are
+    # case-insensitive, so compare on a normalised spelling rather than the raw string.
+    def norm(value: str) -> str:
+        return value.replace("\\", "/").rstrip("/").lower()
+
+    wanted = norm(Path(root).resolve().as_posix())
+    for key, entry in projects.items():
+        if isinstance(key, str) and norm(key) == wanted:
+            if isinstance(entry, dict):
+                return bool(entry.get("hasTrustDialogAccepted"))
+            return None
+    return False
+
+
 def sync_permissions(cfg: Config, root: Path | None = None) -> list[str]:
     """Grant each generated lane's server in `.claude/settings.local.json`.
 

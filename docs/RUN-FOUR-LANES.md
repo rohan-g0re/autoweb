@@ -137,6 +137,21 @@ session that already had lane files keeps serving the old ones after their conte
 That failure is silent and has already cost one wasted run, where stale lanes all connected
 to a single server, shared one tab, and overwrote each other's page with no error anywhere.
 
+### The folder must be trusted, or no lane gets a browser
+
+`lanes sync` checks this and will tell you. If it says the folder is not trusted, stop:
+Claude Code refuses to start the `mcpServers` in an agent file from an untrusted folder,
+and it refuses silently. The lane runs, its browser tools are absent, `ToolSearch` says
+"No matching deferred tools found", and nothing explains why outside a debug log.
+`--dangerously-skip-permissions` does not help.
+
+This is not hypothetical. On the first real attempt a naive agent found the lanes
+unaided, dispatched four of them in one message, and zero browsers started.
+
+Fix it by running Claude Code once in the repo folder and accepting the trust prompt.
+The flag is `projects["<abs path>"].hasTrustDialogAccepted` in `~/.claude.json`, but
+editing somebody's Claude config by hand is their decision, not yours: ask.
+
 ## 7. The test, and the part that must stay independent
 
 Read `goals/four-lanes-one-identity.md`. **Do not do those tasks yourself.**

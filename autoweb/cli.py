@@ -299,6 +299,28 @@ def _cmd_lanes_sync(args: argparse.Namespace) -> int:
         print(f"{len([r for r in results if r.action != 'removed'])} lanes in "
               f"{cfg.root_dir / lanes.AGENTS_DIRNAME}")
 
+    # Checked before anything else is said about the lanes, because when this is wrong
+    # nothing else about them matters: the files are perfect and no browser starts.
+    trusted = lanes.workspace_is_trusted(cfg.root_dir)
+    if trusted is False:
+        print()
+        print("  STOP: this folder is not trusted by Claude Code, so the lanes you just")
+        print("  generated will NOT get browsers. Claude Code refuses to start the")
+        print("  mcpServers declared in an agent file from an untrusted folder, and it")
+        print("  does it quietly: the lane runs, its browser tools are simply missing,")
+        print("  and ToolSearch answers 'No matching deferred tools found'. The real")
+        print("  error only appears in a debug log. --dangerously-skip-permissions does")
+        print("  not bypass it.")
+        print()
+        print("  Fix it by running Claude Code once in this folder and accepting the")
+        print("  trust prompt. Measured on a fresh clone: four lanes dispatched")
+        print("  correctly and zero browsers ever started.")
+    elif trusted is None:
+        print()
+        print("  note: could not read ~/.claude.json, so whether this folder is trusted")
+        print("        is unknown. Lanes get no browsers from an untrusted folder, and")
+        print("        the failure is silent, so check it if they come back empty.")
+
     granted = lanes.sync_permissions(cfg)
     print(f"  granted {len(granted)} lane servers in {lanes.LOCAL_SETTINGS_PATH} "
           f"({granted[0]} .. {granted[-1]})")

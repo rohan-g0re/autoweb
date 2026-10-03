@@ -27,6 +27,7 @@ from autoweb.lanes import (
     server_name,
     sync,
     sync_permissions,
+    workspace_is_trusted,
 )
 
 
@@ -561,3 +562,84 @@ def test_the_storage_capability_reaches_the_generated_file(tmp_path):
     """The frontmatter is what the server is actually started with."""
     entry = frontmatter(lane_markdown(1, config_at(tmp_path)))["mcpServers"][0]
     assert "--caps=storage" in entry[server_name(1)]["args"]
+
+
+# --- the trusted-workspace requirement --------------------------------------
+#
+# Measured on a fresh clone: four lanes dispatched correctly, a naive agent found them
+# unaided, and zero browsers ever started. Claude Code will not start the mcpServers in
+# an agent file from an untrusted folder, and the only trace is a debug-log line.
+
+
+def _claude_json(tmp_path, body):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude.json").write_text(json.dumps(body), encoding="utf-8")
+    return home
+
+
+def test_a_trusted_folder_is_recognised(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    home = _claude_json(tmp_path, {"projects": {
+        project.resolve().as_posix(): {"hasTrustDialogAccepted": True}}})
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert workspace_is_trusted(project) is True
+
+
+def test_an_untrusted_folder_is_recognised(tmp_path, monkeypatch):
+    """False, not None. This is the case that silently costs you every browser."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    home = _claude_json(tmp_path, {"projects": {
+        project.resolve().as_posix(): {"hasTrustDialogAccepted": False}}})
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert workspace_is_trusted(project) is False
+
+
+def test_a_folder_claude_has_never_seen_is_untrusted(tmp_path, monkeypatch):
+    """A fresh clone is exactly this, and it is the shape the real failure took."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    home = _claude_json(tmp_path, {"projects": {"/somewhere/else": {}}})
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert workspace_is_trusted(project) is False
+
+
+def test_project_keys_are_matched_whatever_the_slashes(tmp_path, monkeypatch):
+    """Claude Code stores these keys with forward slashes on every platform, so a
+    Windows path has to be normalised before comparing or the answer is always False."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    key = project.resolve().as_posix().replace("/", B + B)
+    home = _claude_json(tmp_path, {"projects": {key: {"hasTrustDialogAccepted": True}}})
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert workspace_is_trusted(project) is True
+
+
+def test_an_unreadable_config_is_unknown_rather_than_untrusted(tmp_path, monkeypatch):
+    """None, not False. A false alarm here teaches people to ignore the warning, and the
+    warning is the only thing standing between them and a silent hour of debugging."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude.json").write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert workspace_is_trusted(project) is None
+
+
+def test_a_missing_config_is_unknown(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    assert workspace_is_trusted(project) is None
+
