@@ -57,9 +57,15 @@ sed -n '1,4p' "$OUT/inspect.txt"
 # No agent can measure its own concurrency: from inside an orchestrator a staggered
 # dispatch and a parallel one look identical. So the browsers get counted by a process
 # that is not taking part.
+#
+# `--user-data-di[r]=` rather than `--user-data-dir=` on purpose. The grep process's own
+# argv appears in `ps` output, and the plain pattern matches itself, so the count read 1
+# with zero browsers running - a counter that reports a browser that does not exist is
+# worse than no counter. The bracket means the regex needs a literal 'r' that the argv
+# does not have.
 ( while :; do
     printf '%s %s\n' "$(date -u +%H:%M:%S)" \
-      "$(ps -eo args 2>/dev/null | grep -o -- '--user-data-dir=[^ ]*' | sort -u | wc -l)"
+      "$(ps -eo args 2>/dev/null | grep -o -- '--user-data-di[r]=[^ ]*' | sort -u | wc -l)"
     sleep 2
   done ) >"$OUT/browsers.log" 2>/dev/null &
 POLLER=$!

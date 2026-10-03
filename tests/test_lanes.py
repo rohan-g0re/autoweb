@@ -614,7 +614,8 @@ def test_project_keys_are_matched_whatever_the_slashes(tmp_path, monkeypatch):
     Windows path has to be normalised before comparing or the answer is always False."""
     project = tmp_path / "proj"
     project.mkdir()
-    key = project.resolve().as_posix().replace("/", B + B)
+    backslash = chr(92)
+    key = project.resolve().as_posix().replace("/", backslash)
     home = _claude_json(tmp_path, {"projects": {key: {"hasTrustDialogAccepted": True}}})
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
