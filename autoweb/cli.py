@@ -203,8 +203,14 @@ def _cmd_state_inspect(args: argparse.Namespace) -> int:
     over = []
     if summary.total_bytes > cfg.caps.total_bytes:
         over.append(f"total_bytes ({summary.total_bytes} > {cfg.caps.total_bytes})")
-    if len(summary.origins) > cfg.caps.max_origins:
-        over.append(f"max_origins ({len(summary.origins)} > {cfg.caps.max_origins})")
+    # Counted against origins that actually hold storage, not against every cookie
+    # domain. A real profile carries hundreds of ad-tech domains that set a cookie and
+    # store nothing, and counting those reported OVER CAP on every real identity while
+    # saying nothing about the thing the cap exists to bound.
+    stored = [o for o in summary.origins if o.local_storage_keys or o.indexeddb_stores]
+    if len(stored) > cfg.caps.max_origins:
+        over.append(f"max_origins ({len(stored)} origins with storage > "
+                    f"{cfg.caps.max_origins})")
     if over:
         print()
         print(f"  OVER CAP: {', '.join(over)}")

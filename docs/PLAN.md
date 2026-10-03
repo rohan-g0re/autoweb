@@ -169,7 +169,15 @@ The window between "kill it" and killing it.
   origins visited, cookies changed vs root, trace) → `context.close()` then
   `browser.close()` → deregister.
 
-**Known blocker, read from the vendor source before building.** Every storage tool
+**The blocker is resolved, and in the cheap direction.** Measured on a real 1.9 GB Chrome
+profile: the whole identity exports to 1.5 MB, of which IndexedDB is **527 bytes**, being
+three LinkedIn telemetry databases. Google contributes none. So teardown harvests through
+MCP with `--caps=storage` and the CDP seam does not get built. Phase 4 is the small option.
+One profile is not every profile, so an origin whose IndexedDB was not collected is still
+recorded as not collected rather than as empty; that rule stays whatever the measurement
+says.
+
+**The original reasoning, kept because the mechanism still holds.** Every storage tool
 declares `capability: "storage"`, and `filteredTools()` ships a tool only if its
 capability starts with `core` or is named in `--caps`. The lane argv passes no `--caps`,
 so a lane today cannot save or restore anything. Worse, `browser_storage_state` calls

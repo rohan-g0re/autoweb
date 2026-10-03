@@ -97,6 +97,19 @@ def _matches_any(host: str, hosts: set[str]) -> bool:
     return any(hosts_match(host, other) for other in hosts)
 
 
+def _host(value: str) -> str:
+    """A cookie domain and an origin host, reduced to the same spelling.
+
+    `config._host_of` strips a *trailing* dot but not a leading one, because for a URL
+    there is never a leading one. A cookie domain has one constantly: `.linkedin.com`.
+    Leaving it on meant `.linkedin.com` and `www.linkedin.com` compared as different
+    sites, so a cookie conflict could not evict that site's storage and a storage
+    conflict could not evict its cookies - the exact half-identity this module is
+    supposed to prevent, reintroduced by reusing a normaliser written for URLs.
+    """
+    return _host_of(value).lstrip(".")
+
+
 @dataclass
 class OriginDecision:
     """What happened to one origin or cookie host, and why. The audit trail."""
@@ -183,11 +196,11 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
     lane_origins = {name: _origins_by_name(state) for name, state in ordered.items()}
 
     # --- every host this merge touches, from both cookies and origins, both sides ----
-    every_host: set[str] = {_host_of(name) for name in root_origins}
-    every_host |= {_host_of(key[1]) for key in root_cookies}
+    every_host: set[str] = {_host(name) for name in root_origins}
+    every_host |= {_host(key[1]) for key in root_cookies}
     for name in ordered:
-        every_host |= {_host_of(origin) for origin in lane_origins[name]}
-        every_host |= {_host_of(key[1]) for key in lane_cookies[name]}
+        every_host |= {_host(origin) for origin in lane_origins[name]}
+        every_host |= {_host(key[1]) for key in lane_cookies[name]}
     every_host.discard("")
 
     sticky: set[str] = set()
@@ -206,9 +219,9 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
     touched: dict[str, set[str]] = {}
     for name in ordered:
         for origin in lane_origins[name]:
-            touched.setdefault(_host_of(origin), set()).add(name)
+            touched.setdefault(_host(origin), set()).add(name)
         for key in lane_cookies[name]:
-            touched.setdefault(_host_of(key[1]), set()).add(name)
+            touched.setdefault(_host(key[1]), set()).add(name)
     rotating_violations = sorted(
         f"{host} was touched by {len(who)} lanes ({', '.join(sorted(who))})"
         for host, who in touched.items()
@@ -231,11 +244,11 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
         changed = {name: cookies[key] for name, cookies in lane_cookies.items()
                    if key in cookies and _text(cookies[key].get("value")) != base}
         if len({_text(c.get("value")) for c in changed.values()}) > 1:
-            note_conflict(_host_of(key[1]), sorted(changed))
+            note_conflict(_host(key[1]), sorted(changed))
 
     for name_of_origin in sorted(set(root_origins) | {
             o for origins in lane_origins.values() for o in origins}):
-        host = _host_of(name_of_origin)
+        host = _host(name_of_origin)
         ancestor = root_origins.get(name_of_origin)
         base_ls = _local_storage(ancestor) if ancestor else {}
         contributors = {name: lane_origins[name][name_of_origin] for name in ordered
@@ -269,7 +282,7 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
 
     every_cookie = set(root_cookies) | {k for c in lane_cookies.values() for k in c}
     for key in sorted(every_cookie):
-        host = _host_of(key[1])
+        host = _host(key[1])
         if _matches_any(host, evicted_hosts):
             if key in root_cookies:
                 evicted_cookies += 1
@@ -306,7 +319,7 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
 
     for name_of_origin in sorted(set(root_origins) | {
             o for origins in lane_origins.values() for o in origins}):
-        host = _host_of(name_of_origin)
+        host = _host(name_of_origin)
         ancestor = root_origins.get(name_of_origin)
         contributors = {name: lane_origins[name][name_of_origin] for name in ordered
                         if name_of_origin in lane_origins[name]}
@@ -369,7 +382,7 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
 
     # A host whose session is only cookies has no origin, so without this it would be
     # evicted with nothing in the report to say so.
-    reported = {_host_of(d.origin) for d in decisions}
+    reported = {_host(d.origin) for d in decisions}
     for host in sorted(evicted_hosts):
         if not _matches_any(host, reported):
             decisions.append(OriginDecision(

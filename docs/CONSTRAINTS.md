@@ -217,6 +217,42 @@ and current tab. These things about that, all **live**:
   Interleaved timestamps in one `.playwright-mcp/` directory mean one server. Two lanes
   reporting a single tab at index 0 whose site keeps changing mean the same thing.
 
+- **A Google session does not survive a storageState transplant.** **live, on a real
+  profile.** An export carried 3903 cookies including non-empty `SID` and
+  `__Secure-3PSID`, and a fresh browser seeded from it was still redirected from both
+  `mail.google.com` and `myaccount.google.com` to
+  `accounts.google.com/v3/signin/confirmidentifier`. LinkedIn from the same export worked
+  on the first try, landing on `/feed/` with a 200 and the account's own name on the page.
+  So the cookies are necessary and not sufficient: Google binds the session to something
+  the JSON does not carry, most likely device-bound credentials or an IP and user-agent
+  check. Inference, not measurement, for the cause; the redirect itself is measured.
+
+  The practical rule is the one already in this repo for a different reason: do not build
+  on Gmail. Phase 2's advice was about bot defences and it turns out to be right about
+  session portability too.
+
+- **IndexedDB holds almost nothing for a real logged-in profile.** **live.** A 1.9 GB
+  Chrome profile exported to a 1.5 MB storageState with 819 cookie domains and exactly
+  four origins carrying storage. Of that, cookies were about 1,045 KB, localStorage about
+  319 KB, and **IndexedDB 527 bytes** - three LinkedIn telemetry databases named
+  `beacons`, `grpcRestBeacons` and `sequenceNumber`. Google contributed no IndexedDB at
+  all.
+
+  This settles a design question that was open for the whole project. The fear was that
+  roughly 30 of 31 MB of real login state lives in IndexedDB, which would have forced a
+  CDP seam with Python owning the browser so it could call
+  `storage_state(indexed_db=True)`. For this identity it is the other way round: a lane
+  harvesting through MCP with `--caps=storage` loses 527 bytes of telemetry. One profile
+  is not every profile, and a Firebase or Supabase app would look different, but the
+  expensive design is no longer justified by the evidence available.
+
+- **`Last Browser` in a profile directory is stale and misleading.** **live.** Both
+  Pursuit profiles name `C:/Program Files/Google/Chrome/Application/chrome.exe`, which
+  would suggest opening them with Chrome rather than Chromium. `Last Version` said
+  `155.0.8059.12`, which is exactly Playwright's chromium-1247, and the cookies decrypted
+  correctly under Chromium. Check `Last Version` against `browsers.json`, not
+  `Last Browser`.
+
 - **`browser_navigate` does not return the snapshot inline.** **live.** On 0.0.83 it
   writes the page to `.playwright-mcp/page-<timestamp>.yml` and returns a pointer, so a
   lane needs a separate `browser_snapshot` or a file read before it can act. The floor
