@@ -2,7 +2,7 @@
 #
 # Every option here has a working default — this file exists so you can see what is
 # adjustable, not because anything must be set. Delete any line to take the default.
-# Options are documented at their definition in src/autoweb/config.py.
+# Options are documented at their definition in autoweb/config.py.
 
 [lanes]
 max = 5              # ceiling on concurrent lanes, never a target

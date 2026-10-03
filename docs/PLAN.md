@@ -40,7 +40,10 @@ deferred**, not abandoned; the code stays POSIX-clean so it ports later.
 
 ## Phase 1 — repo skeleton and config
 
-- `pyproject.toml` (uv), `src/autoweb/`, `tests/`, `docs/`.
+- `pyproject.toml` (uv), `autoweb/`, `tests/`, `docs/`.
+  Flat package at root, not `src/`: both Python comparables (hermes-agent,
+  browser-use) do this, and a stub people fork should import without an
+  install step.
 - `autoweb.toml` — human-authored config. Separate JSON for what the loop learns.
 - Config options from `BUILD-SPEC.md`: lane ceiling, caps (total bytes, max origins,
   max IndexedDB stores/origin), per-origin `indexeddb` / `rotates` / `sticky`.
