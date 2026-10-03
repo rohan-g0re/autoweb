@@ -431,6 +431,20 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     print()
     print(f"  cookies: {result.cookies_kept} kept, {result.cookies_updated} updated, "
           f"{result.cookies_added} added, {result.cookies_evicted} evicted")
+    if result.cookies_refreshed:
+        # "0 updated" after four real sessions reads like the merge did nothing. Usually
+        # it means the servers extended cookies without rotating them, which is a kept
+        # cookie with a later expiry, and the merge did take the longest-lived copy.
+        print(f"           {result.cookies_refreshed} of the kept ones had only their "
+              f"expiry extended, so they are not counted as updated")
+    if result.volatile_conflicts:
+        print()
+        print("  lanes disagreed on these and it was ignored on purpose - every browser "
+              "mints")
+        print("  its own, so N browsers always produce N values and none of them is a "
+              "credential:")
+        for host, names in sorted(result.volatile_conflicts.items()):
+            print(f"    {host}: {', '.join(names)}")
     print()
     for decision in result.decisions:
         who = f"  [{', '.join(decision.changed_by)}]" if decision.changed_by else ""

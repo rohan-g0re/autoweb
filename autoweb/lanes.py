@@ -212,6 +212,20 @@ content under another site's name, with no error anywhere. Two snapshots of the 
 tab disagreeing, or a navigate whose URL and title name different sites, both mean the
 same thing: stop and say so rather than reporting the content.
 
+## Anything you write goes under `.playwright-mcp/`
+
+Page snapshots, screenshots, scratch notes: `.playwright-mcp/{LANE_PREFIX}{index}-<what>.<ext>`.
+That directory is gitignored, and it is where the MCP server already puts its own
+output.
+
+The repository root is not yours to write in. On the first real four-lane run two lanes
+dropped `lane2-search.yml` and `lane4-notif.yml` there, untracked and unignored, which
+puts a file holding whatever was on a logged-in page one `git add -A` away from a public
+repository.
+
+The one exception is the state file a goal document names, which that document places
+deliberately.
+
 ## Report
 
 State what you did, what you found, and the URL every fact came from.

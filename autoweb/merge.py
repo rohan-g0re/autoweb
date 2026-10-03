@@ -35,6 +35,19 @@ detection may revoke the entire family and sign the user out everywhere. Evictio
 one manual login. Guessing can cost all of them. This applies to IndexedDB exactly as it
 does to cookies: that is where refresh tokens actually live.
 
+**Except for the values a browser mints for itself, which are not credentials.** That
+rule, applied to every cookie, is wrong in the common case, and was measured to be wrong
+on the first real run. Four lanes read LinkedIn and Google read-only; `li_at` and
+`JSESSIONID` came back byte-identical from all four, so nothing had rotated - and the
+merge still proposed evicting `www.linkedin.com`, `accounts.google.com`, `www.google.com`
+and `li.protechts.net`, leaving `0 origins`. The disagreement was entirely in
+bot-management cookies: `__cf_bm`, `_px3`, `pxcts`, `__Secure-3PSIDCC`. Those are bound
+to one browser instance by design, so N fresh browsers always produce N different values.
+Writing that merge would have signed `root.json` out of LinkedIn as the direct result of
+a read-only run. A safety rule that destroys the identity on every successful run is not
+a safety rule, so a conflict confined to `VOLATILE_COOKIE_NAMES` keeps root's copy and
+evicts nothing.
+
 **Eviction is by host, and cookies and storage are evicted together.** A cookie's domain
 and an origin's host are different strings for the same site: `.linkedin.com` against
 `https://www.linkedin.com`. Matching them exactly meant a cookie conflict silently spared
@@ -79,6 +92,44 @@ def _text(value: Any) -> str:
     make a null compare unequal to a real value, manufacturing a conflict out of nothing.
     """
     return "" if value is None else str(value)
+
+
+# Cookies a browser mints for itself: bot management, load-balancer stickiness, and
+# fingerprint-bound clearances. Lanes disagreeing here says "these are two different
+# browsers", which is the premise of running lanes at all, not "a credential rotated".
+#
+# **Measured conflicting** on the four-lane LinkedIn/Google run of 2026-10-03: `__cf_bm`,
+# `_px3`, `pxcts`, `__Secure-3PSIDCC`. The rest are the same products' other cookie
+# names, taken from vendor documentation and *not* observed here.
+#
+# Deliberately a short list of names, and deliberately not a pattern like "anything
+# starting with an underscore". Everything here survives being stale because the site
+# re-mints it on the next page load. A name that does not have that property would hide
+# a real rotation, which is the failure this module exists to prevent, so a name goes on
+# only with a reason. `JSESSIONID` is pointedly absent: LinkedIn uses it as its CSRF
+# token, it is paired with `li_at`, and it did not conflict.
+VOLATILE_COOKIE_NAMES = frozenset({
+    "__cf_bm", "cf_clearance", "__cflb", "__cfruid",         # Cloudflare
+    "_px2", "_px3", "_pxde", "_pxhd", "_pxvid", "pxcts",     # PerimeterX / HUMAN
+    "_abck", "ak_bmsc", "bm_mi", "bm_sv", "bm_sz",           # Akamai
+    "datadome",                                              # DataDome
+    "awsalb", "awsalbcors", "awsalbtg", "awsalbtgcors",      # AWS ALB stickiness
+    "__secure-1psidcc", "__secure-3psidcc",                  # Google, re-minted per browser
+})
+
+# Names carrying a per-browser id *after* the prefix, so the whole name differs too.
+VOLATILE_COOKIE_PREFIXES = ("incap_ses_", "visid_incap_", "nlbi_")
+
+
+def is_volatile(name: str) -> bool:
+    """Whether lanes disagreeing about this cookie is expected rather than alarming.
+
+    Case-insensitive: servers are inconsistent about it, and Chrome hands over
+    `__Secure-3PSIDCC` in exactly that spelling.
+    """
+    lowered = name.lower()
+    return (lowered in VOLATILE_COOKIE_NAMES
+            or lowered.startswith(VOLATILE_COOKIE_PREFIXES))
 
 
 def hosts_match(a: str, b: str) -> bool:
@@ -131,6 +182,15 @@ class MergeResult:
     evicted_origins: list[str]
     rotating_violations: list[str]
     cap_violations: list[str] = field(default_factory=list)
+    # Of the kept cookies, how many were value-identical but had their expiry extended.
+    # Broken out because "1 added, 0 updated" after four real logged-in sessions reads
+    # like the merge did nothing, and whether an expiry refresh counts as an update is a
+    # question the output should answer rather than the reader of this file.
+    cookies_refreshed: int = 0
+    # host -> volatile cookie names that disagreed and were deliberately not acted on.
+    # Reported, because "nothing conflicted" and "four bot-management cookies conflicted
+    # and were ignored on purpose" must not look the same from outside.
+    volatile_conflicts: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def total_bytes(self) -> int:
@@ -229,13 +289,35 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
     )
 
     # --- PASS 1: find every conflict, in every store, before evicting anything -------
-    conflicts: dict[str, list[str]] = {}       # host -> the lanes that disagreed
+    conflicts: dict[str, list[str]] = {}        # host -> the lanes that disagreed
+    conflict_detail: dict[str, list[str]] = {}  # host -> what they disagreed about
+    volatile: dict[str, set[str]] = {}          # host -> ignored volatile cookie names
 
-    def note_conflict(host: str, who: list[str]) -> None:
+    def note_conflict(host: str, who: list[str], what: str) -> None:
         conflicts.setdefault(host, [])
         for lane in who:
             if lane not in conflicts[host]:
                 conflicts[host].append(lane)
+        detail = conflict_detail.setdefault(host, [])
+        if what not in detail:
+            detail.append(what)
+
+    def conflict_report(host: str) -> tuple[list[str], list[str]]:
+        """Who disagreed, and about what, across every host that matches this one.
+
+        A lookup keyed on the exact host was wrong: a cookie on `.linkedin.com` reduces
+        to `linkedin.com` while its origin is `www.linkedin.com`, so eviction fired
+        through `hosts_match` but the report came back empty and named neither a lane nor
+        a value. An eviction notice that cannot say what triggered it is how a merge bug
+        gets mistaken for token rotation.
+        """
+        who: list[str] = []
+        what: list[str] = []
+        for other, lanes_involved in conflicts.items():
+            if hosts_match(host, other):
+                who += [x for x in lanes_involved if x not in who]
+                what += [x for x in conflict_detail.get(other, []) if x not in what]
+        return who, what
 
     every_cookie = set(root_cookies) | {k for c in lane_cookies.values() for k in c}
     for key in sorted(every_cookie):
@@ -244,7 +326,10 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
         changed = {name: cookies[key] for name, cookies in lane_cookies.items()
                    if key in cookies and _text(cookies[key].get("value")) != base}
         if len({_text(c.get("value")) for c in changed.values()}) > 1:
-            note_conflict(_host(key[1]), sorted(changed))
+            if is_volatile(key[0]):
+                volatile.setdefault(_host(key[1]), set()).add(key[0])
+                continue
+            note_conflict(_host(key[1]), sorted(changed), f"cookie {key[0]}")
 
     for name_of_origin in sorted(set(root_origins) | {
             o for origins in lane_origins.values() for o in origins}):
@@ -263,7 +348,7 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
                           for name, o in contributors.items()
                           if k in _local_storage(o) and _local_storage(o)[k] != before}
             if len(set(changed_ls.values())) > 1:
-                note_conflict(host, sorted(changed_ls))
+                note_conflict(host, sorted(changed_ls), f"localStorage[{k}]")
 
         # IndexedDB gets the same treatment as everything else. It did not, once, and
         # that is the single most dangerous bug this module has had: refresh tokens live
@@ -272,13 +357,13 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
         changed_idb = {name: _idb(o) for name, o in contributors.items()
                        if _idb(o) and _idb(o) != base_idb}
         if len({json.dumps(v, sort_keys=True) for v in changed_idb.values()}) > 1:
-            note_conflict(host, sorted(changed_idb))
+            note_conflict(host, sorted(changed_idb), "indexedDB")
 
     evicted_hosts = {host for host in conflicts if not _matches_any(host, sticky)}
 
     # --- PASS 2: build the merged state, skipping anything on an evicted host ---------
     merged_cookies: dict[CookieKey, dict[str, Any]] = {}
-    kept = updated = added = evicted_cookies = 0
+    kept = updated = added = evicted_cookies = refreshed = 0
 
     every_cookie = set(root_cookies) | {k for c in lane_cookies.values() for k in c}
     for key in sorted(every_cookie):
@@ -293,6 +378,17 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
                   if key in cookies}
         changed = {name: c for name, c in voters.items()
                    if _text(c.get("value")) != base}
+
+        if is_volatile(key[0]) and \
+                len({_text(c.get("value")) for c in changed.values()}) > 1:
+            # A disagreement pass 1 declined to evict over. Taking a lane's copy would
+            # import one browser's fingerprint into the shared identity, which is exactly
+            # what these cookies encode; root's copy is stale at worst. A volatile cookie
+            # absent from root is left absent rather than crowning a winner.
+            if ancestor is not None:
+                merged_cookies[key] = ancestor
+                kept += 1
+            continue
 
         if changed:
             merged_cookies[key] = next(iter(changed.values()))
@@ -313,6 +409,8 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
         if best is not None:
             merged_cookies[key] = best
         kept += 1
+        if ancestor is not None and best is not ancestor:
+            refreshed += 1
 
     merged_origins: dict[str, dict[str, Any]] = {}
     decisions: list[OriginDecision] = []
@@ -325,12 +423,12 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
                         if name_of_origin in lane_origins[name]}
 
         if _matches_any(host, evicted_hosts):
-            who = sorted(set(conflicts.get(host, [])) | set(contributors))
+            disagreed, about = conflict_report(host)
             decisions.append(OriginDecision(
                 name_of_origin, "evicted",
-                "two lanes changed the same value to different things, so one holds a "
-                "token the server has already rotated away. Log in again.",
-                who))
+                f"lanes disagreed on {', '.join(about) or 'a stored value'}, so one of "
+                f"them holds a token the server has already rotated away. Log in again.",
+                sorted(set(disagreed) | set(contributors))))
             continue
 
         if not contributors:
@@ -385,11 +483,12 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
     reported = {_host(d.origin) for d in decisions}
     for host in sorted(evicted_hosts):
         if not _matches_any(host, reported):
+            disagreed, about = conflict_report(host)
             decisions.append(OriginDecision(
                 host, "evicted",
-                "two lanes changed the same cookie to different values. This host has "
-                "no stored origin, so its cookies alone were dropped. Log in again.",
-                sorted(conflicts.get(host, []))))
+                f"lanes disagreed on {', '.join(about) or 'a cookie'}. This host has no "
+                f"stored origin, so its cookies alone were dropped. Log in again.",
+                sorted(disagreed)))
 
     result = MergeResult(
         state={"cookies": [merged_cookies[k] for k in sorted(merged_cookies)],
@@ -401,6 +500,9 @@ def merge(root: dict[str, Any], lanes: dict[str, dict[str, Any]],
         cookies_evicted=evicted_cookies,
         evicted_origins=sorted(d.origin for d in decisions if d.action == "evicted"),
         rotating_violations=rotating_violations,
+        cookies_refreshed=refreshed,
+        volatile_conflicts={host: sorted(names)
+                            for host, names in sorted(volatile.items())},
     )
     result.cap_violations = check_caps(result, cfg)
     return result
@@ -485,5 +587,6 @@ def write_root(root_path: Path, result: MergeResult) -> Path:
     return root_path
 
 
-__all__ = ["CookieKey", "MergeError", "MergeResult", "OriginDecision", "check_caps",
-           "cookie_key", "hosts_match", "merge", "merge_files", "write_root"]
+__all__ = ["VOLATILE_COOKIE_NAMES", "VOLATILE_COOKIE_PREFIXES", "CookieKey",
+           "MergeError", "MergeResult", "OriginDecision", "check_caps", "cookie_key",
+           "hosts_match", "is_volatile", "merge", "merge_files", "write_root"]

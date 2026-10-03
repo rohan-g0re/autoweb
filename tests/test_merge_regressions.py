@@ -243,3 +243,137 @@ def test_an_ipv6_origin_does_not_collapse_onto_every_other_one():
     })
     survivors = [o["origin"] for o in result.state["origins"]]
     assert survivors == ["http://[::2]:3000"]
+
+
+# --- the defect the first real four-lane run found --------------------------
+# These four cookies were measured conflicting across four concurrent browsers reading
+# LinkedIn and Google with no login action at all, on 2026-10-03. `li_at` and
+# `JSESSIONID` were byte-identical in all four, so nothing had rotated - and the merge
+# proposed evicting every origin, down to "0 origins". Writing it would have signed
+# root.json out of LinkedIn as the direct result of a read-only run.
+
+def test_bot_management_cookies_do_not_evict_a_logged_in_site():
+    """The reported case, reduced: four lanes, four different `__cf_bm` values, an
+    untouched session cookie, and a stored origin that must survive."""
+    root = state(
+        cookies=[cookie("li_at", "SESSION", domain=".linkedin.com"),
+                 cookie("__cf_bm", "root-mint", domain=".linkedin.com")],
+        origins=[origin("https://www.linkedin.com", {"voyager": "payload"})],
+    )
+    lanes = {
+        f"lane-{n}": state(
+            cookies=[cookie("li_at", "SESSION", domain=".linkedin.com"),
+                     cookie("__cf_bm", f"browser-{n}", domain=".linkedin.com")],
+            origins=[origin("https://www.linkedin.com", {"voyager": "payload"})],
+        )
+        for n in (1, 2, 3, 4)
+    }
+    result = merge(root, lanes)
+
+    assert result.evicted_origins == [], "a read-only run must not destroy the login"
+    assert [o["origin"] for o in result.state["origins"]] == ["https://www.linkedin.com"]
+    survivors = {c["name"]: c["value"] for c in result.state["cookies"]}
+    assert survivors["li_at"] == "SESSION"
+    # Root's copy, not any lane's: a lane's value is that browser's fingerprint, and
+    # importing it into the shared identity is what these cookies exist to prevent.
+    assert survivors["__cf_bm"] == "root-mint"
+    assert result.volatile_conflicts == {"linkedin.com": ["__cf_bm"]}
+
+
+def test_the_other_measured_names_are_covered_whatever_their_case():
+    """`__Secure-3PSIDCC` arrives from Chrome in that spelling; `_px3` and `pxcts` are
+    PerimeterX. All three conflicted on the same run."""
+    for name in ("__Secure-3PSIDCC", "_px3", "pxcts", "__CF_BM"):
+        root = state(cookies=[cookie(name, "root"), cookie("sid", "keep")])
+        result = merge(root, {
+            "lane-1": state(cookies=[cookie(name, "a"), cookie("sid", "keep")]),
+            "lane-2": state(cookies=[cookie(name, "b"), cookie("sid", "keep")]),
+        })
+        assert result.evicted_origins == [], f"{name} must not evict"
+        assert result.volatile_conflicts, f"{name} must still be reported"
+
+
+def test_a_real_session_cookie_still_evicts():
+    """The safety rule is narrowed, not removed. A conflict on anything not on the list
+    is still treated as a rotated credential, because it may be one."""
+    root = state(cookies=[cookie("li_at", "SESSION", domain=".linkedin.com")],
+                 origins=[origin("https://www.linkedin.com", {"k": "v"})])
+    result = merge(root, {
+        "lane-1": state(cookies=[cookie("li_at", "ROTATED-A", domain=".linkedin.com")]),
+        "lane-2": state(cookies=[cookie("li_at", "ROTATED-B", domain=".linkedin.com")]),
+    })
+    assert result.evicted_origins == ["https://www.linkedin.com"]
+    assert result.state["cookies"] == []
+
+
+def test_jsessionid_is_not_treated_as_volatile():
+    """Deliberate, and worth a test so nobody adds it for looking per-connection.
+    LinkedIn uses JSESSIONID as its CSRF token, paired with `li_at`."""
+    root = state(cookies=[cookie("JSESSIONID", "ajax:1", domain=".linkedin.com")],
+                 origins=[origin("https://www.linkedin.com", {"k": "v"})])
+    result = merge(root, {
+        "lane-1": state(cookies=[cookie("JSESSIONID", "ajax:2", domain=".linkedin.com")]),
+        "lane-2": state(cookies=[cookie("JSESSIONID", "ajax:3", domain=".linkedin.com")]),
+    })
+    assert result.evicted_origins == ["https://www.linkedin.com"]
+
+
+def test_an_eviction_notice_names_the_value_and_the_lanes():
+    """The first run's dry run said only "two lanes changed the same value", which is
+    what made a merge design bug look like token rotation. It must name the cookie.
+
+    Also a regression on the lookup: the conflict is recorded against the cookie's host,
+    `linkedin.com`, while the decision is reported against the origin's host,
+    `www.linkedin.com`. An exact-key lookup found nothing and named no lane at all."""
+    root = state(cookies=[cookie("li_at", "SESSION", domain=".linkedin.com")],
+                 origins=[origin("https://www.linkedin.com", {"k": "v"})])
+    result = merge(root, {
+        "lane-1": state(cookies=[cookie("li_at", "A", domain=".linkedin.com")]),
+        "lane-2": state(cookies=[cookie("li_at", "B", domain=".linkedin.com")]),
+    })
+    evicted = [d for d in result.decisions if d.action == "evicted"]
+    assert len(evicted) == 1
+    assert "cookie li_at" in evicted[0].reason
+    assert evicted[0].changed_by == ["lane-1", "lane-2"]
+
+
+def test_a_localstorage_eviction_names_the_key():
+    root = state(origins=[origin("https://a.example", {"token": "0"})])
+    result = merge(root, {
+        "lane-1": state(origins=[origin("https://a.example", {"token": "1"})]),
+        "lane-2": state(origins=[origin("https://a.example", {"token": "2"})]),
+    })
+    reason = [d for d in result.decisions if d.action == "evicted"][0].reason
+    assert "localStorage[token]" in reason
+
+
+def test_an_expiry_only_refresh_is_counted_separately():
+    """"1 added, 0 updated" across four real logged-in sessions read like the merge had
+    done nothing. It had: the servers extended cookies without rotating them, which is a
+    kept cookie with a later expiry. The report now says so."""
+    root = state(cookies=[cookie("sid", "same", expires=1759000000)])
+    result = merge(root, {
+        "lane-1": state(cookies=[cookie("sid", "same", expires=1760000000)]),
+    })
+    assert result.cookies_updated == 0
+    assert result.cookies_kept == 1
+    assert result.cookies_refreshed == 1
+    assert result.state["cookies"][0]["expires"] == 1760000000
+
+
+def test_an_unchanged_cookie_is_not_counted_as_refreshed():
+    root = state(cookies=[cookie("sid", "same", expires=1759000000)])
+    result = merge(root, {"lane-1": state(cookies=[cookie("sid", "same")])})
+    assert result.cookies_refreshed == 0
+
+
+def test_a_volatile_cookie_absent_from_root_is_not_invented():
+    """With no ancestor there is no stale-but-neutral copy to keep, and crowning a lane
+    would write one browser's fingerprint into the shared identity."""
+    result = merge(state(), {
+        "lane-1": state(cookies=[cookie("__cf_bm", "a")]),
+        "lane-2": state(cookies=[cookie("__cf_bm", "b")]),
+    })
+    assert result.state["cookies"] == []
+    assert result.cookies_added == 0
+    assert result.evicted_origins == []
