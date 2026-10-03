@@ -125,9 +125,19 @@ def _partition(cookie: dict[str, Any]) -> str:
     one. Measured on the re-merge: two `tag_user_id` rows on `.trueclassictees.com`, one
     partition site, the bit True on one and False on the other, and only one survived.
 
-    An absent bit is its own value, not False. Whether Playwright omits the field when it
-    is False has not been checked here, and guessing would re-introduce the collapse for
-    exactly the rows that are hardest to notice.
+    An absent bit on a partitioned cookie means **true**, which is Playwright's own
+    semantics rather than a guess: it writes the field for every partitioned cookie on
+    export, and on import reads it as `_crHasCrossSiteAncestor ?? true`. **Read from the
+    playwright-core bundle of playwright 1.63**; the lanes' MCP runs 1.64, where it has
+    not been re-checked.
+
+    This was briefly a third value, "absent", on the reasoning that splitting one cookie
+    into two is the recoverable direction. That reasoning is wrong here, and usefully so.
+    Two rows differing only in absent-versus-true land in the *same* browser partition on
+    seed, so one silently overwrites the other - and the merge would report two surviving
+    identities while the browser kept one. An accounting invariant that disagrees with
+    the browser is worse than no invariant, because it is the thing you check the browser
+    against.
     """
     raw = cookie.get("partitionKey")
     if isinstance(raw, dict):
@@ -138,7 +148,7 @@ def _partition(cookie: dict[str, Any]) -> str:
         ancestor = cookie.get("_crHasCrossSiteAncestor")
     if not site:
         return ""
-    bit = "?" if ancestor is None else ("1" if ancestor else "0")
+    bit = "1" if (ancestor is None or ancestor) else "0"
     return f"{site}|{bit}"
 
 

@@ -489,6 +489,15 @@ Two rules fall out, and they generalise past cookies:
 - **Normalise to the semantic thing, not to the encoding.** "Canonicalise the dict with
   sorted keys" is a statement about JSON. The identity is a pair, and a sibling field is
   part of it.
+- **An absent `_crHasCrossSiteAncestor` means `true`.** **read-from-source**, the
+  playwright-core bundle of playwright 1.63: the field is written for every partitioned
+  cookie on export and read as `_crHasCrossSiteAncestor ?? true` on import. Not
+  re-checked on 1.64, which is what the lanes' MCP runs. In the measured export all 886
+  partitioned rows carried the field, so the absent case did not arise - but treating it
+  as a third distinct value, which is the instinct, is wrong in a way worth naming: absent
+  and true land in the *same* browser partition on seed, so one overwrites the other while
+  the merge reports two surviving identities. An accounting invariant that disagrees with
+  the browser is worse than none, because the browser is what it exists to check.
 - **An accounting invariant must count rows, not test membership.** Both collapsed rows
   mapped to one key that *was* present in the output, so a set-membership check saw
   nothing. Row counts per key catch it, and a key that still arrives twice now refuses the

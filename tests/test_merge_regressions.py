@@ -536,16 +536,38 @@ def test_the_object_and_string_encodings_of_one_partition_still_agree():
     assert cookie_key(as_object) == cookie_key(as_string)
 
 
-def test_an_absent_ancestor_bit_is_its_own_value():
-    """Not False. Whether Playwright omits the field when it is False has not been
-    checked, and guessing re-introduces the collapse for the rows hardest to notice.
-    Splitting one cookie into two is the recoverable direction; merging two into one is
-    the silent data loss."""
+def test_an_absent_ancestor_bit_means_true_not_a_third_value():
+    """Playwright's own semantics, read from the playwright-core bundle of 1.63: it writes
+    the field for every partitioned cookie on export and reads it as
+    `_crHasCrossSiteAncestor ?? true` on import.
+
+    This was briefly a third value on the reasoning that splitting one cookie into two is
+    the recoverable direction. It is not, here: absent and true land in the same browser
+    partition on seed, so one overwrites the other and the merge would report two
+    surviving identities where the browser keeps one. An invariant that disagrees with the
+    browser is worse than none, because the browser is what it exists to check."""
     from autoweb.merge import cookie_key
     without = partitioned("sid", "v", "https://b.example")
+    with_true = partitioned("sid", "v", "https://b.example")
+    with_true["_crHasCrossSiteAncestor"] = True
     with_false = partitioned("sid", "v", "https://b.example")
     with_false["_crHasCrossSiteAncestor"] = False
+    assert cookie_key(without) == cookie_key(with_true)
     assert cookie_key(without) != cookie_key(with_false)
+
+
+def test_an_absent_bit_does_not_split_a_row_into_two_identities():
+    """The failure the third value would have caused: two rows the browser would collapse
+    counted as two surviving cookies by the merge."""
+    without = partitioned("sid", "v", "https://b.example")
+    with_true = partitioned("sid", "v", "https://b.example")
+    with_true["_crHasCrossSiteAncestor"] = True
+    result = merge(state(cookies=[without, with_true]), {"lane-1": state()})
+    assert result.cookie_rows == 1
+    # One row in two spellings is one cookie, so the invariant must see a real loss here
+    # and refuse rather than claim both were kept.
+    assert len(result.lost_cookies) == 1
+    assert not result.writable
 
 
 def test_a_key_that_arrives_twice_refuses_the_write(tmp_path):
