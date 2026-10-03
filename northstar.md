@@ -20,8 +20,13 @@
     output caught the merge signing `root.json` out of LinkedIn — whole-origin eviction
     fired on per-browser bot-management cookies (`__cf_bm`, `_px3`, `pxcts`,
     `__Secure-3PSIDCC`) and took it to zero origins on a successful read-only run. That
-    is fixed. Owed: a merge written to `root.json`, and an identity that still works
-    after it.
+    is fixed. A merge has since been written to a real `root.json` and
+    `autoweb state verify` returned exit 0 against the LinkedIn feed afterwards, so the
+    line holds for a cookie-session site. That same merge also lost 737 partitioned
+    cookie rows while reporting `0 evicted`, because the cookie identity ignored
+    `partitionKey`; fixed, with the write now refused if any ancestor cookie is
+    unaccounted for. Owed: the re-merge on the fixed code, and a site whose auth lives
+    behind MFA or in IndexedDB rather than in a cookie.
 
 
 - command: **SIMULATION**
