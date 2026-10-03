@@ -106,6 +106,14 @@ uv run autoweb lanes list     # which are generated, which were hand-written
 A lane is a subagent with its own browser. Dispatch several in one message. They cannot
 see each other's tabs, cookies or storage, and all start from the same `root.json`.
 
+## The run that is pending
+
+`docs/RUN-FOUR-LANES.md` is a step-by-step runbook for the test that is currently owed:
+several lanes spawned from one already-logged-in browser profile, proven concurrent by
+timestamp, and merged back without destroying the identity. It is written to be followed
+by a session with no other context, because the step that creates the lanes also requires
+restarting Claude Code, which can end the session holding the instructions.
+
 ## What is owed
 
 - A lane run seeded with a real identity instead of an empty storageState.
