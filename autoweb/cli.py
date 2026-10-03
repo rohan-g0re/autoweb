@@ -95,16 +95,44 @@ def _human_bytes(n: int) -> str:
 
 
 def _cmd_state_export(args: argparse.Namespace) -> int:
-    """Open a browser, wait for a human login, capture the session."""
+    """Capture a session, either from a human logging in or from a profile that has one."""
     cfg = Config.load(args.dir)
     out = Path(args.out).resolve() if args.out else cfg.root_state_path
 
-    summary = state.export_interactive(
-        out,
-        args.url,
-        browser=cfg.lanes.browser,
-        indexeddb=cfg.state.indexeddb,
-    )
+    if args.from_profile:
+        # A profile somebody logged into months ago is a perfectly good source of
+        # identity, because state flows out of a profile freely. No human needed.
+        if not args.url and not args.visit:
+            raise StateError(
+                "--from-profile needs at least one origin to walk: pass --visit URL "
+                "(repeatable), or a positional url. A storageState only collects "
+                "localStorage and IndexedDB for origins the browser has visited, so "
+                "without one you get cookies and nothing else."
+            )
+        visit = list(args.visit or [])
+        if args.url and args.url not in visit:
+            visit.insert(0, args.url)
+        summary = state.export_from_profile(
+            out,
+            Path(args.from_profile).resolve(),
+            visit=visit,
+            browser=cfg.lanes.browser,
+            indexeddb=cfg.state.indexeddb,
+        )
+        print()
+        print(f"walked {len(visit)} origin(s) in {args.from_profile}")
+    else:
+        if not args.url:
+            raise StateError(
+                "'state export' needs a url to open, or --from-profile to read an "
+                "existing browser profile instead."
+            )
+        summary = state.export_interactive(
+            out,
+            args.url,
+            browser=cfg.lanes.browser,
+            indexeddb=cfg.state.indexeddb,
+        )
 
     print()
     print(f"wrote {summary.path}")
@@ -117,7 +145,8 @@ def _cmd_state_export(args: argparse.Namespace) -> int:
               "in cookies; suspicious if it uses Firebase, Supabase or Auth0.")
     print()
     suffix = "" if not args.out else f" {summary.path}"
-    print(f"  verify it:  autoweb state verify {args.url}{suffix}")
+    target = args.url or (args.visit[0] if args.visit else "<a logged-in url>")
+    print(f"  verify it:  autoweb state verify {target}{suffix}")
     return 0
 
 
@@ -316,11 +345,22 @@ def build_parser() -> argparse.ArgumentParser:
         "export",
         help="open a browser, wait for you to log in, then save the session",
         description="Opens a headed browser and waits. You log in by hand; AutoWeb "
-                    "never sees your password, it only reads the session afterwards.",
+                    "never sees your password, it only reads the session afterwards. "
+                    "With --from-profile it reads a profile that is already logged in, "
+                    "and no human is needed.",
     )
-    export.add_argument("url", help="page to open, e.g. https://example.com")
+    export.add_argument("url", nargs="?", default=None,
+                        help="page to open, e.g. https://example.com")
     export.add_argument("-o", "--out", default=None, metavar="PATH",
                         help="where to write (default: state.root from config)")
+    export.add_argument("--from-profile", default=None, metavar="DIR",
+                        help="read an existing browser profile instead of waiting for a "
+                             "login. Pass a COPY: launching a browser locks the "
+                             "directory. Needs --visit.")
+    export.add_argument("--visit", action="append", default=None, metavar="URL",
+                        help="origin to walk before capturing, repeatable. Required "
+                             "with --from-profile, because a storageState only collects "
+                             "localStorage and IndexedDB for visited origins.")
     export.set_defaults(func=_cmd_state_export)
 
     inspect = st_sub.add_parser(

@@ -381,6 +381,94 @@ def _launch(pw, browser: str, *, headless: bool):
         raise StateError(f"could not launch '{browser}': {first_line}\n  {hint}") from exc
 
 
+def export_from_profile(
+    out: Path,
+    profile_dir: Path,
+    *,
+    visit: list[str] | None = None,
+    browser: str = "chromium",
+    indexeddb: bool = True,
+    timeout_seconds: int = 120,
+) -> StateSummary:
+    """Capture a storageState out of an **existing** browser profile. No human needed.
+
+    This is the other direction of the asymmetry that shapes the whole project: state
+    flows *out* of a profile freely, and never back in. So a profile somebody already
+    logged into by hand, months ago, is a perfectly good source of identity, and
+    `export_interactive` is only for when no such profile exists.
+
+    **Pass a copy of the profile, not the live one.** Launching a browser on a profile
+    directory locks it, and a second browser on a locked profile fails silently on
+    Windows. Copying also means a bug here cannot damage the original.
+
+    **`visit` is not optional in practice, and this is the subtle part.** A storageState
+    collects localStorage and IndexedDB by running script in a page per origin, and the
+    only origins it considers are the ones the context has actually visited. A profile
+    freshly launched has visited nothing, so an export without `visit` tends to return
+    cookies and no origin storage at all - which looks like a successful export of a
+    half-identity. Name the origins you care about and they get walked first.
+
+    Returns the summary so the caller can see what was actually captured rather than
+    assuming.
+    """
+    ensure_writable(out)
+    if not profile_dir.is_dir():
+        raise StateError(
+            f"{profile_dir}: no profile directory here. Point --from-profile at a "
+            f"browser profile directory, or copy one there first."
+        )
+
+    pw_api = _playwright()
+    with pw_api() as pw:
+        context = _launch_persistent(pw, browser, profile_dir, headless=True)
+        context.set_default_timeout(timeout_seconds * 1000)
+        try:
+            for url in visit or []:
+                page = context.new_page()
+                try:
+                    _goto(page, url, timeout_seconds)
+                    # Settle: tokens in IndexedDB are often written by script that runs
+                    # after domcontentloaded, so harvesting immediately can miss them.
+                    page.wait_for_timeout(2000)
+                finally:
+                    page.close()
+            state = context.storage_state(indexed_db=indexeddb)
+        finally:
+            context.close()
+
+    save(out, state)
+    return summarise(out, state)
+
+
+def _launch_persistent(pw, browser: str, profile_dir: Path, *, headless: bool):
+    """Open a persistent context on *profile_dir*.
+
+    Deliberately no `storage_state` argument. `launch_persistent_context` accepts one,
+    launches, and silently ignores it, which is the single fact the architecture is
+    built around.
+    """
+    try:
+        args: dict[str, Any] = {
+            "user_data_dir": str(profile_dir),
+            "headless": headless,
+        }
+        if browser == "firefox":
+            return pw.firefox.launch_persistent_context(**args)
+        if browser == "webkit":
+            return pw.webkit.launch_persistent_context(**args)
+        if browser != "chromium":
+            args["channel"] = browser
+        return pw.chromium.launch_persistent_context(**args)
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else str(exc)
+        raise StateError(
+            f"could not open the profile at {profile_dir} with '{browser}': "
+            f"{first_line}" \
+            f"\n  If another browser is using that directory, close it or "
+            f"copy the profile and point at the copy."
+        ) from exc
+
+
 def _goto(page, url: str, timeout_seconds: int):
     """Navigate, converting Playwright's errors into something actionable."""
     try:
@@ -397,6 +485,7 @@ __all__ = [
     "SeedResult",
     "StateError",
     "StateSummary",
+    "export_from_profile",
     "export_interactive",
     "load",
     "save",

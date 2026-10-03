@@ -13,6 +13,7 @@ the suite stays offline and runs in under two seconds.
 from __future__ import annotations
 
 import json
+import pathlib
 
 import pytest
 
@@ -252,3 +253,42 @@ def test_lanes_sync_leaves_a_hand_written_lane_alone_and_says_so(project, capsys
     out = capsys.readouterr().out
     assert "lane-1.md" in out
     assert "hand" in out.lower()
+
+
+# --- state export --from-profile --------------------------------------------
+
+
+def test_export_from_profile_demands_an_origin_to_walk(project, capsys):
+    """The failure this prevents is silent and expensive. A storageState collects
+    localStorage and IndexedDB only for origins the context has visited, so an export
+    with nothing to walk returns cookies and no origin storage, which looks like a
+    successful export of a working identity and is not one."""
+    (project / "fake-profile").mkdir()
+    assert run(["state", "export", "--from-profile",
+                str(project / "fake-profile")], project) == 2
+    assert "--visit" in capsys.readouterr().err
+
+
+def test_export_needs_either_a_url_or_a_profile(project, capsys):
+    assert run(["state", "export"], project) == 2
+    assert "--from-profile" in capsys.readouterr().err
+
+
+def test_export_from_a_missing_profile_directory_says_so(project, capsys):
+    assert run(["state", "export", "--from-profile", str(project / "nope"),
+                "--visit", "https://x.example/"], project) == 2
+    assert "profile" in capsys.readouterr().err.lower()
+
+
+def test_a_copied_profile_at_the_repo_root_cannot_be_committed(project):
+    """A logged-in profile is as sensitive as root.json. The canonical location is
+    covered by `.autoweb/`, but the mistake someone actually makes is copying it to the
+    repo root, so the patterns have to catch that too."""
+    import subprocess
+    repo = pathlib.Path(__file__).parent.parent
+    for candidate in ("browser-profile/Default/Cookies",
+                      "pursuit-browser-profile/Default/Cookies",
+                      "profile-copy/Default/Cookies"):
+        out = subprocess.run(["git", "check-ignore", "-v", candidate],
+                             cwd=repo, capture_output=True, text=True)
+        assert out.returncode == 0, f"{candidate} is NOT gitignored"

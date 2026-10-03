@@ -75,3 +75,13 @@ lane-*.json.*
 .claude/agents/lane-*.md
 
 .venv/
+
+# Copied browser profiles. A profile that is logged in is as sensitive as root.json:
+# it holds cookies, localStorage and IndexedDB for every site it ever touched.
+# `.autoweb/` already covers the canonical location; these catch a copy left at the
+# repo root, which is the mistake someone in a hurry actually makes.
+browser-profile*/
+*-browser-profile/
+*browser-profile*/
+profile-copy*/
+*.profile/
