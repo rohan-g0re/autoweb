@@ -18,9 +18,18 @@
 
 set -uo pipefail
 
-GOAL="${1:-goals/four-lanes-one-identity.md}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO" || exit 1
+
+# No goal ships with the repository (goals are per project and personal), so
+# the document is a required argument. goals/README.md is the format.
+GOAL="${1:-}"
+if [ -z "$GOAL" ] || [ ! -f "$GOAL" ]; then
+  echo "usage: scripts/run-lane-test.sh goals/<goal>.md" >&2
+  echo "goal documents present:" >&2
+  ls goals/*.md 2>/dev/null | grep -v '/README\.md$' >&2 || echo "  (none; see goals/README.md for the format)" >&2
+  exit 2
+fi
 
 OUT="${AUTOWEB_RUN_DIR:-${TMPDIR:-/tmp}/autoweb-lane-test-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
