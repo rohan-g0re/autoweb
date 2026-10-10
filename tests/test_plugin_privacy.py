@@ -58,13 +58,14 @@ def test_no_identity_profile_run_or_local_file_is_tracked():
 
 def test_no_personal_reference_in_any_tracked_text_file():
     hits = []
-    me = Path(__file__).resolve()
+    # Files whose job is to hold the forbidden patterns as search terms.
+    pattern_holders = {"tests/test_plugin_privacy.py", "tests/test_plugin_manifests.py"}
     for rel in tracked_files():
         path = REPO / rel
         if path.suffix.lower() not in TEXT_SUFFIXES or rel == "uv.lock":
             continue
-        if path.resolve() == me:
-            continue  # this file holds the patterns themselves
+        if rel in pattern_holders:
+            continue
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:

@@ -110,7 +110,7 @@ design rules for the package; this file is how to write to them.
 ```bash
 claude plugin validate . --strict
 .venv/Scripts/python.exe -m pytest -q    # or: uv run pytest -q
-git grep -n -i -E "rohan|pursuit|/home/|C:\\\\Users" -- . ':!uv.lock' ':!northstar.md'
+.venv/Scripts/python.exe -m pytest -q tests/test_plugin_privacy.py   # no personal data or browser artifact is tracked
 grep -rnE '\]\((\./)?(references|scripts)/' skills/    # markdown links to files: none
 ```
 
