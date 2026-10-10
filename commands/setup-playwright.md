@@ -60,18 +60,26 @@ Run these and record results. Do not fix anything yet.
    more than one scope, record that too — project scope wins, but the user should
    know about the collision.
 
+   The `autoweb` plugin defines a `playwright` server of its own, so in a project with
+   no `.mcp.json` at all this step can still report Connected. That is a pass: the
+   server is there and the smoke test can run. Record which scope it came from.
+
 ---
 
 ## Phase 2 — Fix what is missing
 
 Act only on what Phase 1 found missing.
 
-1. **Node < 18 or absent** → STOP. Tell the user to install Node 18+ and re-run. Do
-   not attempt to install Node.
+1. **Node < 18 or absent** → STOP. Tell the user to install Node 18+ and re-run
+   `/autoweb:setup-playwright`. Do not attempt to install Node.
 
 2. **`.mcp.json` missing, or present without a playwright entry** → write exactly the
    JSON from Phase 1 step 2. If the file exists with *other* servers in it, add the
    playwright entry and leave the rest untouched.
+
+   Skip this when Phase 1 step 4 already reported the server Connected from the plugin's
+   own scope and the user did not ask for a project-scoped copy. Two definitions of the
+   same server name is the collision Phase 1 asks you to record, not a thing to create.
 
    Add no flags. Not `--user-data-dir`, not `--isolated`, not `--headless`. Zero
    flags is the stock configuration from the official README, and browser-profile
@@ -107,7 +115,7 @@ Re-run `claude mcp get playwright`.
   3. **Trust the workspace** when prompted.
   4. **Approve the `playwright` server** at the project-scope prompt. Claude Code
      then writes `enabledMcpjsonServers` into `.claude/settings.local.json` itself.
-  5. Re-run this command.
+  5. Re-run `/autoweb:setup-playwright`.
 
   Worth saying in the report: an `enabledMcpjsonServers` entry committed to a tracked
   `.claude/settings.json` is **ignored until the workspace is trusted**. It is a
@@ -174,8 +182,9 @@ should take. Do not offer a menu of options.
   five browser tools the smoke test actually calls. Everything that *changes* the
   machine — writing `.mcp.json`, `npx ... --help`, `npx playwright install` — is
   deliberately left out, so it goes through the normal permission prompt. This matters
-  because `allowed-tools` is **not** gated by workspace trust: a command checked into
-  a repository grants itself those tools even in a folder you have never trusted.
+  because `allowed-tools` is **not** gated by workspace trust: a command shipped in a
+  plugin, or checked into a repository, grants itself those tools even in a folder you
+  have never trusted.
   Keep this list exact-match and minimal. Do not widen it to `Bash(npx:*)` or
   `mcp__playwright__*`.
 - The server writes run artifacts (page snapshots, screenshots) to `.playwright-mcp/`

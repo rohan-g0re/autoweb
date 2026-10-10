@@ -14,8 +14,23 @@ The exception is `lanes.isolated = false`. Those lanes are never seeded from
 `root.json`. Each one gets its own profile directory under `.autoweb/profiles/lane-N`
 instead, keeps whatever it was logged in to last time, and a profile that has never
 been used starts logged out. If the lanes you dispatch behave as though nobody logged
-in, check `autoweb config show` for that flag before blaming the sites. Parallel work
-wants the default.
+in, check `config show` for that flag before blaming the sites. Parallel work wants the
+default.
+
+## Running the commands
+
+Every AutoWeb command in this skill runs through the plugin's launcher, which uses the
+installed `autoweb` when there is one and the shipped package otherwise. `-C "$PWD"`
+names the project explicitly, because the lanes, the identity and the config all belong
+to the project directory rather than to the plugin:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" config show
+```
+
+Exit codes are the package's own: 0 pass, 1 a gate failed, 2 your files are wrong. Below,
+a command is named by its subcommand — `lanes list`, `state verify` — and run with that
+same prefix.
 
 ## Dispatch every lane in one message
 
@@ -37,15 +52,19 @@ scheduler.
 ## Decide how many
 
 Count the **independent** pieces of work, then use that many lanes, up to the number of
-lanes that `autoweb lanes list` reports as **generated**. Independent means no piece
-needs another's output.
+lanes that `lanes list` reports as **generated**. Independent means no piece needs
+another's output.
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" lanes list
+```
 
 Read that list carefully, because the ceiling is the generated count and not the file
 count. `lanes list` also reports hand-written files, and a hand-written `lane-2.md`
 without an inline `mcpServers` block shares the session's one browser instead of owning
 its own. Dispatching it looks like a lane and then quietly collides with every other
-lane in a single tab. Run `autoweb lanes sync` and delete the hand-written file if you
-want that lane number back.
+lane in a single tab. Run `lanes sync` and delete the hand-written file if you want that
+lane number back.
 
 Use one lane when the work is a single chain of steps on one site: log in, navigate,
 fill, submit. Splitting that across lanes adds coordination and wins nothing, because
@@ -67,10 +86,10 @@ including the identity they all came from.
 
 Give such a site to **one** lane and route the rest elsewhere. Sites known to behave
 this way carry `rotates = true`, set by hand under `[origins]` in `autoweb.toml`.
-`autoweb config show` prints them. There is a matching `rotates` list in
-`.autoweb/learned.json` for a loop to record a site it catches rotating mid-run, but
-nothing writes that file yet, so today the only entries you will see are the ones
-somebody typed into `autoweb.toml`.
+`config show` prints them. There is a matching `rotates` list in `.autoweb/learned.json`
+for a loop to record a site it catches rotating mid-run, but nothing writes that file
+yet, so today the only entries you will see are the ones somebody typed into
+`autoweb.toml`.
 
 When in doubt about a site that holds money or credentials, one lane.
 
@@ -108,15 +127,22 @@ So the last thing you ask a lane to do, before it finishes, is save its own stat
 > `lane-<your number>.json`. Do this as your final action, after everything else, and
 > report the path it wrote.
 
-Then, once **every** lane has reported and none is still running:
+Then, once **every** lane has reported and none is still running, read the decisions
+before writing anything:
 
-```sh
-autoweb merge lane-1.json lane-3.json --dry-run    # read the decisions first
-autoweb merge lane-1.json lane-3.json              # writes root.json, keeps a .bak
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" merge lane-1.json lane-3.json --dry-run
 ```
 
-One writer, after every lane is dead. Two merges racing on `root.json` is how you get a
-file that is valid JSON and nobody's session.
+and only then write:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" merge lane-1.json lane-3.json
+```
+
+That second command writes `root.json` and keeps a `.bak`. One writer, after every lane
+is dead. Two merges racing on `root.json` is how you get a file that is valid JSON and
+nobody's session.
 
 Read the dry run rather than skipping to the write. It prints a line per origin, and the
 line you are looking for is `evicted`: that means two lanes changed the same value to
@@ -154,7 +180,7 @@ actually loaded the page.
 ## Done when
 
 - Every independent piece of work went to its own lane.
-- Every lane dispatched was one `autoweb lanes list` reports as generated.
+- Every lane dispatched was one `lanes list` reports as generated.
 - Any rotating or money-handling site went to exactly one lane.
 - Each lane was given a checkable assertion rather than a request.
 - No lane reported using `mcp__playwright__*`; any that did was re-dispatched.
@@ -166,15 +192,34 @@ actually loaded the page.
 
 ## If there are no lanes
 
-`autoweb lanes list` shows which lane agent files exist and which of them are
-generated. `autoweb lanes sync` creates them from config. They are generated rather
-than committed, because each one holds an absolute path to this machine's identity
-file.
+`lanes list` shows which lane agent files exist and which of them are generated.
+`lanes sync` creates them from config:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" lanes sync
+```
+
+They are generated rather than committed, because each one holds an absolute path to
+this machine's identity file.
 
 Syncing is not enough on its own. An isolated lane is launched pointing at `root.json`,
-so somebody must have run `autoweb state export <url>` to create it first. Without that
-file a lane does not merely start logged out: **every** browser call it makes fails with
-ENOENT, so the lane comes back having done nothing at all. `autoweb lanes sync` only
-warns about this and still exits zero, so check for the file rather than trusting the
-exit code. `autoweb config show` prints its path and whether it exists, and
-`autoweb state verify <url>` proves the session inside it still works.
+so somebody must have created it first:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" state export https://example.com
+```
+
+Without that file a lane does not merely start logged out: **every** browser call it
+makes fails with ENOENT, so the lane comes back having done nothing at all. `lanes sync`
+only warns about this and still exits zero, so check for the file rather than trusting
+the exit code. `config show` prints its path and whether it exists, and `state verify`
+proves the session inside it still works:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" state verify https://example.com
+```
+
+One more prerequisite is load-bearing: the project folder must be **trusted**, or Claude
+Code refuses to start a lane file's inline `mcpServers` block and does so silently. A
+measured run with it untrusted dispatched four lanes and started zero browsers. Open the
+folder and accept the prompt.

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "autoweb",
+  "description": "A browser automation harness for Claude Code: one identity, config, lanes, goals and runs per project, and nothing shared between projects.",
+  "owner": {
+    "name": "rohan-g0re",
+    "url": "https://github.com/rohan-g0re"
+  },
+  "plugins": [
+    {
+      "name": "autoweb",
+      "description": "A browser automation harness for Claude Code: one identity, config, lanes, goals and runs per project, and nothing shared between projects.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

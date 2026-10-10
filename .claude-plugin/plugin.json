@@ -1,0 +1,18 @@
+{
+  "name": "autoweb",
+  "version": "0.2.0",
+  "description": "A browser automation harness for Claude Code: one identity, config, lanes, goals and runs per project, and nothing shared between projects.",
+  "author": {
+    "name": "rohan-g0re"
+  },
+  "homepage": "https://github.com/rohan-g0re/autoweb",
+  "repository": "https://github.com/rohan-g0re/autoweb",
+  "license": "Apache-2.0",
+  "keywords": [
+    "browser",
+    "playwright",
+    "automation",
+    "lanes",
+    "agents"
+  ]
+}
