@@ -321,7 +321,7 @@ def test_a_copied_profile_at_the_repo_root_cannot_be_committed(project):
     import subprocess
     repo = pathlib.Path(__file__).parent.parent
     for candidate in ("browser-profile/Default/Cookies",
-                      "pursuit-browser-profile/Default/Cookies",
+                      "copied-browser-profile/Default/Cookies",
                       "profile-copy/Default/Cookies"):
         out = subprocess.run(["git", "check-ignore", "-v", candidate],
                              cwd=repo, capture_output=True, text=True,
