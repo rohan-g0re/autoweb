@@ -73,6 +73,8 @@ These are load-bearing. Violating them is how this becomes another framework.
 | Language | Python (decided; TS only behind MCP or a CLI) |
 | Code | `autoweb/`: `config.py`, `state.py`, `lanes.py`, `merge.py`, `trace.py`, `cli.py`. Offline suite green on Linux, ruff clean |
 | CLI | `autoweb config show/check`, `state export/inspect/verify`, `lanes sync/list`, `trace`, `merge` |
+| Ships as | the `autoweb` Claude Code plugin, 0.2.0, installed as `autoweb@autoweb`; this repo is its own marketplace |
+| Version | 0.2.0, in `pyproject.toml`, `.claude-plugin/plugin.json` and `autoweb/__init__.py`; a test asserts they match |
 | Done | northstar lines 1 to 6, line 6 for a cookie-session site only |
 
 `northstar.md` is the task list and the source of truth for sequencing.
@@ -165,6 +167,39 @@ Note on scope: `playwright` is also defined at user scope on the author's machin
 a `--user-data-dir`. Project scope wins here, and `claude mcp list` reports the
 collision. The repo does not depend on the user-scope entry.
 
+## Plugin
+
+AutoWeb installs as a Claude Code plugin, `autoweb@autoweb`, and this repository doubles
+as its marketplace. **`docs/PLUGIN-DESIGN.md` is the contract** — the layout, the runtime
+design of every script, the platform facts it leans on with the date each was verified,
+and the tests. Read it before touching the plugin tree. It is not restated here, because
+two copies of a contract means one of them is wrong and nobody knows which.
+
+```
+.claude-plugin/    plugin.json, marketplace.json
+hooks/             hooks.json — SessionStart only. No Stop hook, no loop.
+scripts/           py.sh, aw_common.py, session_start.py, aw.py, aw_setup.py
+skills/            autoweb, parallel-lanes, aw-setup, aw-doctor, aw-run
+commands/          setup-playwright.md
+goals/README.md    the goal file format; no real goals ship
+```
+
+`skills/parallel-lanes` moved out of `.claude/skills/`, and
+`commands/setup-playwright.md` out of `.claude/commands/`. They are moved, not copied:
+with the plugin installed, a session inside this repo would otherwise load each of them
+twice. `.claude/settings.json` stays, because it is this repo's own MCP enablement and
+allow list.
+
+One install per machine, zero setup per project. Everything belonging to an app you
+automate stays in that app's folder: `autoweb.toml`, `root.json`, `.autoweb/`,
+`goals/*.md`, `runs/`, `lane-*.json`, and the generated `.claude/agents/lane-*.md` and
+`.claude/settings.local.json`. The plugin ships the code and the instructions; it never
+ships anyone's state.
+
+`AGENTS.md` is the authoring standard for this repo, with the reason beside each rule.
+`CHANGELOG.md` records releases, and a release bumps all three version strings in one
+commit.
+
 ## Vocabulary
 
 Fix these meanings now; they drift otherwise.
@@ -244,3 +279,8 @@ Load-bearing summary:
 Not in this version: model routing, parallel simulations, profile merging, a GUI,
 a scheduler, a results server, retry/healing layers. Each is a real feature and
 each one waits.
+
+**No loop, by decision.** AutoWeb's own assertion commands exit non-zero, so a goal is
+done when `/autoweb:aw-run` reports every assertion passed. There is no Stop hook and
+nothing re-runs a failed goal on its own; re-running is the user's call. That is a
+choice about where judgement sits, not a missing feature.

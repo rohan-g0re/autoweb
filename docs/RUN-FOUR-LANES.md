@@ -54,13 +54,12 @@ than pretending.
 
 ## 3. Copy the profile. Copy, never point at the original.
 
-Use the Pursuit **LinkedIn** profile, `~/Desktop/pursuit_linkedin/browser-profile-linkedin`.
-The alternative is `~/Desktop/pursuit_personal/browser-profile`; either works, and the
-LinkedIn one is the default because the tasks lean on LinkedIn. Make sure no browser is
-using the directory while you copy it.
+Pick `<your Chrome profile directory>` — one already signed in to the sites the goal
+names. If you keep several, take the one whose logins the tasks lean on. Make sure no
+browser is using the directory while you copy it.
 
 ```sh
-cp -r ~/Desktop/pursuit_linkedin/browser-profile-linkedin .autoweb/profiles/source
+cp -r "<your Chrome profile directory>" .autoweb/profiles/source
 git check-ignore -v .autoweb/profiles/source     # must print a match
 git status --porcelain                           # must stay empty
 ```
@@ -107,9 +106,9 @@ autoweb state verify https://www.linkedin.com/feed/ --expect-text "<your first n
 
 ### If Google is not signed in, change the tasks
 
-`goals/four-lanes-one-identity.md` assumes both LinkedIn and Google are signed in. A
-LinkedIn-specific profile may hold only LinkedIn. If `inspect` shows no Google session,
-replace the two Google tasks in that document with two more read-only LinkedIn surfaces,
+A four-lane goal file that names both LinkedIn and Google assumes both are signed in,
+and a site-specific profile may hold only one of them. If `inspect` shows no Google
+session, replace the two Google tasks with two more read-only LinkedIn surfaces,
 `https://www.linkedin.com/mynetwork/` and `https://www.linkedin.com/notifications/`, and
 say in your report that you changed them and why. Four tasks and four lanes either way. Do
 not commit that edit.
@@ -154,7 +153,8 @@ editing somebody's Claude config by hand is their decision, not yours: ask.
 
 ## 7. The test, and the part that must stay independent
 
-Read `goals/four-lanes-one-identity.md`. **Do not do those tasks yourself.**
+Read your four-lane goal file — `goals/README.md` gives the format. **Do not do those
+tasks yourself.**
 
 Spawn ONE general-purpose subagent and give it the content of that document. Tell it nothing
 about AutoWeb, lanes, this repo, or what is being proven. The question under test is whether

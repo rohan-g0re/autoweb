@@ -148,11 +148,10 @@ runs was task length: a browser takes seconds to start and a one-page read is ab
 calls, so short lanes come and go.
 
 **Four lanes on one real identity: proven**, 2026-10-03, Arch Linux x86_64, repo at
-`/home/rohan/Desktop/autoweb`. This is the run that was owed here: the lanes carried an
-identity instead of an empty storageState. A copy of a real Pursuit LinkedIn Chrome
-profile was logged into by hand and exported with `autoweb state export --from-profile`
-to a 1.5 MB `root.json`; the four lanes took the four read-only tasks in
-`goals/four-lanes-one-identity.md`.
+`<repo>`. This is the run that was owed here: the lanes carried an identity instead of
+an empty storageState. A copy of a real Chrome profile, signed in by hand, was exported
+with `autoweb state export --from-profile` to a 1.5 MB `root.json`; the four lanes took
+the four read-only tasks in that run's goal file.
 
 The dispatcher was a fresh `claude -p` process told nothing about AutoWeb or lanes. It
 found the `parallel-lanes` skill, ran `autoweb lanes list`, and dispatched all four lanes
@@ -172,7 +171,7 @@ of drift. `li_at` and `JSESSIONID` were byte-identical across `root.json` and al
 lane files: four concurrent uses of one session rotated nothing.
 
 **A prerequisite that cost a whole earlier run.** The workspace folder must be trusted.
-`projects["/home/rohan/Desktop/autoweb"].hasTrustDialogAccepted` was false, and an
+`projects["<repo>"].hasTrustDialogAccepted` was false, and an
 identical run with it false dispatched four lanes and started zero browsers, silently.
 Flipping it to true is what made this run work.
 

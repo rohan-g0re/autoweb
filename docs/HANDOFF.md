@@ -1,8 +1,8 @@
 # Start here
 
 For whoever picks this up on a machine that has not seen it before. Read this, then
-`CLAUDE.md`, then `docs/CONSTRAINTS.md`. Fifteen minutes, and you will know as much as
-the last session did.
+`CLAUDE.md`, then `docs/CONSTRAINTS.md`; add `docs/PLUGIN-DESIGN.md` if you are touching
+the plugin tree. Fifteen minutes, and you will know as much as the last session did.
 
 ## Where things run
 
@@ -27,10 +27,11 @@ markdown. `northstar.md` is the ordered task list and nothing gets built ahead o
 
 | | |
 |---|---|
-| Proven | northstar lines 1 to 5 |
-| Not built | line 6, profile merge |
-| Tests | 184, all offline, none opens a browser |
-| Commands | `autoweb config show\|check`, `state export\|inspect\|verify`, `lanes sync\|list` |
+| Proven | northstar lines 1 to 5; line 6, merge-back, for a cookie-session site only |
+| Open | line 7, `SIMULATION`. Line 6 against MFA or IndexedDB-backed auth |
+| Ships as | the `autoweb` Claude Code plugin, 0.2.0 — see `docs/PLUGIN-DESIGN.md` |
+| Tests | offline, none opens a browser. A count is not quoted here; it rots |
+| Commands | `autoweb config show\|check`, `state export\|inspect\|verify`, `lanes sync\|list`, `trace`, `merge` |
 
 Phases 1 to 3 each passed an independent gate. The gates matter more than the tests:
 **every serious defect in this repo's history survived a green suite.** Phase 1's gate
@@ -52,6 +53,13 @@ found 14, phase 2's found 13 across two rounds, phase 3 took three gates.
    changes nothing, and the stale session cannot tell. `lanes sync` says so.
 
 ## Getting running
+
+**The short way is the plugin.** `README.md` has the two install lines and
+`/autoweb:aw-setup`, in one place; run those and you have the `autoweb` CLI, a browser and
+a project skeleton without reading any further. Restart the session afterwards, because
+hooks, agent files and `.mcp.json` are read at session start only.
+
+**The clone way** is what you want if you are going to change the code:
 
 ```sh
 git clone https://github.com/rohan-g0re/autoweb.git && cd autoweb
@@ -106,19 +114,19 @@ uv run autoweb lanes list     # which are generated, which were hand-written
 A lane is a subagent with its own browser. Dispatch several in one message. They cannot
 see each other's tabs, cookies or storage, and all start from the same `root.json`.
 
-## The run that is pending
+## The runbook
 
-`docs/RUN-FOUR-LANES.md` is a step-by-step runbook for the test that is currently owed:
-several lanes spawned from one already-logged-in browser profile, proven concurrent by
-timestamp, and merged back without destroying the identity. It is written to be followed
-by a session with no other context, because the step that creates the lanes also requires
-restarting Claude Code, which can end the session holding the instructions.
+`docs/RUN-FOUR-LANES.md` walks several lanes from one already-logged-in browser profile,
+proves them concurrent by timestamp, and merges them back without destroying the identity.
+It was run on 2026-10-03 and passed; keep it for repeating the run against a new target.
+It is written to be followed by a session with no other context, because the step that
+creates the lanes also requires restarting Claude Code, which can end the session holding
+the instructions.
 
 ## What is owed
 
-- A lane run seeded with a real identity instead of an empty storageState.
-- Phase 2 against a site with MFA and IndexedDB-backed auth. The public test site has
-  neither.
+- Phase 2 and the merge against a site with MFA or IndexedDB-backed auth. Everything
+  proven so far is proven for one cookie-session site.
 - Phase 4, teardown and harvest, blocked on the `inspect` number above. Note that every
   storage tool sits behind `--caps=storage`, which the lane argv now passes, and that
   `browser_storage_state` calls `storageState()` bare, so it captures no IndexedDB.

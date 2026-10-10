@@ -186,8 +186,8 @@ and current tab. These things about that, all **live**:
 - **And they do it from one real logged-in identity, which is the claim that matters.**
   **live, 2026-10-03, Arch Linux x86_64.** Every lane run before this one started from an
   empty `storageState`, so none of them proved the thing the feature exists for. This one
-  started from a copy of a real Pursuit LinkedIn Chrome profile, logged in by hand and
-  exported to a 1.5 MB `root.json`.
+  started from a copy of a real Chrome profile, signed in by hand and exported to a
+  1.5 MB `root.json`.
 
   Four lanes, four read-only LinkedIn and Google tasks, dispatched in one assistant
   message by a fresh `claude -p` told nothing about AutoWeb. A poller outside the run saw
@@ -300,7 +300,7 @@ and current tab. These things about that, all **live**:
   expensive design is no longer justified by the evidence available.
 
 - **`Last Browser` in a profile directory is stale and misleading.** **live.** Both
-  Pursuit profiles name `C:/Program Files/Google/Chrome/Application/chrome.exe`, which
+  profiles measured name `C:/Program Files/Google/Chrome/Application/chrome.exe`, which
   would suggest opening them with Chrome rather than Chromium. `Last Version` said
   `155.0.8059.12`, which is exactly Playwright's chromium-1247, and the cookies decrypted
   correctly under Chromium. Check `Last Version` against `browsers.json`, not

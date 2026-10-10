@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    name: plugin validate (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      # `claude plugin validate` is offline and needs no login: it reads the
+      # manifests, skills and hooks from disk and makes no API call. Verified
+      # locally on Claude Code 2.1.273, 2026-10-10. (`--json` exists on some CLI
+      # versions and not others, so CI relies on the exit code.) `--strict` turns
+      # warnings into failures, which is the point -- an unknown manifest key
+      # otherwise loads silently and does nothing.
+      - name: Validate plugin
+        run: claude plugin validate . --strict
+
+  pytest:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # The dev tools are declared twice on purpose: as a `dev` extra and as a
+      # `dev` dependency group, so that pip and uv can each set up a clone on
+      # their own. `uv sync` installs the group by default and extras only when
+      # asked, so `--extra dev` exercises both lists and a drift between them
+      # fails here rather than in somebody's clone.
+      - name: Install
+        run: uv sync --extra dev
+
+      # The suite is offline. Nothing here opens a browser, and the plugin tests
+      # use a temporary AW_HOME, a temporary CLAUDE_CONFIG_DIR and fake tools on
+      # an empty PATH, so no real ~/.claude.json is read or written.
+      - name: Run tests
+        run: uv run pytest -q
