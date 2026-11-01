@@ -1,0 +1,10 @@
+# Line endings.
+#
+# `scripts/py.sh` is run as `bash py.sh ...` and is pure POSIX sh. A Windows
+# checkout that converted it to CRLF would break it in the way that is hardest
+# to read: bash treats the trailing \r as part of the last word on the line, so
+# `exit 0` becomes `exit 0\r` and every quoted path grows an invisible
+# character. Pin every shell script to LF on every platform, whatever the
+# clone's core.autocrlf says.
+* text=auto
+*.sh text eol=lf

@@ -1,0 +1,69 @@
+[project]
+name = "autoweb"
+version = "0.2.0"
+description = "A stub for web automation. Not a framework."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "AutoWeb contributors" }]
+keywords = ["browser-automation", "playwright", "mcp", "agents", "llm"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+  # Browser control. Needed for the one operation MCP cannot do:
+  # storageState({indexedDB: True}). See docs/STORAGE-EXPORT.md.
+  "playwright>=1.51",
+  # TOML writing (reading uses stdlib tomllib on 3.11+).
+  "tomli-w>=1.0",
+  "tomli>=2.0 ; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+# Only needed once lanes move out of Claude Code and into their own processes.
+sdk = ["claude-agent-sdk>=0.2", "mcp>=1.6.0"]
+# Deliberately the same list as the `dev` dependency-group below, and that duplication
+# is the point: `uv sync` installs groups and ignores extras, while pip cannot install a
+# PEP 735 group at all without a recent version and an explicit --group. Listing the dev
+# tools in both tables is what lets `uv sync` and `pip install -e ".[dev]"` each work on
+# their own, so a clone is not hostage to one installer being present.
+dev = ["pytest>=8.0", "ruff>=0.6", "pyyaml>=6.0.3"]
+
+[project.scripts]
+autoweb = "autoweb.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/rohan-g0re/autoweb"
+Documentation = "https://github.com/rohan-g0re/autoweb/tree/main/docs"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["autoweb"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+# `uv sync` installs groups by default and extras only when asked. With the dev tools in
+# the extra alone, a fresh clone got no test runner and `uv run pytest` fell back to
+# whatever pytest was on PATH, which cannot import `autoweb` and fails with a
+# ModuleNotFoundError that reads like a packaging bug. Verified by cloning into a temp
+# directory. Kept in sync with the `dev` extra above on purpose; see the note there.
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    # test_lanes parses the generated agent frontmatter rather than grepping it.
+    "pyyaml>=6.0.3",
+]
