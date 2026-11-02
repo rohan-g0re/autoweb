@@ -153,10 +153,13 @@ and current tab. These things about that, all **live**:
   `lane2`, ...) and tools named `mcp__lane1__browser_*`. A permission rule names one
   server, so `mcp__lane` does not cover `mcp__lane1`; each lane needs its own rule or
   its first browser call stops for an approval nobody is watching for.
-- **A lane also sees the orchestrator's `mcp__playwright__*` tools.** They are not
-  hidden and cannot be revoked, and a lane that calls one lands in the single shared
-  browser alongside every other lane. The generated lane file says so in as many words,
-  which is the whole defence.
+- **A lane can see the orchestrator's `mcp__playwright__*` tools unless they are
+  withheld.** A lane that calls one lands in the single shared browser alongside every
+  other lane. The generated lane file lists `mcp__playwright` under `disallowedTools`,
+  which Claude Code documents as removing that server's tools from the subagent (docs
+  read 2026-11-01; not yet measured in a lane run). A shared server under another name,
+  such as a plugin-namespaced one, is not covered, and the lane body still forbids it in
+  writing.
 - **Inside a subagent, MCP tools arrive deferred**: the names are visible, the schemas
   are not. One `ToolSearch` call before the first browser call is enough, verified
   across four lane executions. Budget it as a call.

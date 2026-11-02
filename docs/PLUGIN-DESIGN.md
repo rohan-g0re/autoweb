@@ -18,7 +18,7 @@ What ships, once:
 |---|---|---|
 | the `autoweb` package | `autoweb/` | config, state export/verify, lane generator, merge, trace, CLI |
 | CLI launcher | `scripts/aw.py` | runs the installed `autoweb` if present, else the shipped package in place |
-| Python finder | `scripts/py.sh` | POSIX launcher that finds Python >= 3.10 for the hooks and skills |
+| Python finder | `scripts/py.sh` | POSIX launcher that finds Python >= 3.11 for the hooks and skills |
 | shared helpers | `scripts/aw_common.py` | paths, project detection, tool discovery, log |
 | SessionStart hook | `scripts/session_start.py` | one status line, only in AutoWeb projects |
 | setup and doctor | `scripts/aw_setup.py` | `--check`, `--install`, `--init-project` |
@@ -98,8 +98,10 @@ All verified 2026-10-10 on Claude Code 2.1.273, Windows 11, unless marked.
 
 ### 5.1 `scripts/aw_common.py`
 
-Standard library only; Python 3.10+ (the package floor; no `tomllib`, config is
-read through `autoweb.config` from the plugin root). Public API:
+Standard library only; Python 3.11+ (the package floor, and the first with `tomllib`
+in the standard library). Config is still read through `autoweb.config` from the
+plugin root, never parsed here, so the plugin and the CLI cannot disagree about a
+key. Public API:
 
 ```
 PLUGIN_ROOT                        this repository / the installed plugin dir
@@ -154,7 +156,7 @@ prompt)`, `trust unknown`. Exits 0 always; errors go to the log.
 
 `--check` (default), `--install`, `--init-project`, `--json`, `--cwd DIR`.
 
-Checks, labels exact: `python >= 3.10`, `uv`, `node >= 18`, `playwright mcp
+Checks, labels exact: `python >= 3.11`, `uv`, `node >= 20`, `playwright mcp
 0.0.83` (npx cache warm: `npx --no-install @playwright/mcp@0.0.83 --version`
 or equivalent; a cold cache is a NOTE, not a failure), `autoweb cli` (installed
 binary found, or "running in place from the plugin"), `playwright package`
@@ -260,10 +262,11 @@ which the generator never does on its own. The doctor's `lanes` NOTE prints any
 point at temp dirs; fake tools are generated scripts on an empty PATH; nothing
 touches the real `~/.autoweb-plugin`, `~/.claude.json` or the network. The
 existing 282 package tests keep passing unchanged. `test_packaging.py`'s
-promises (requires-python `>=3.10`, wheel packages `["autoweb"]`) stay true.
+promises (requires-python `>=3.11`, no `tomli` dependency, wheel packages
+`["autoweb"]`) stay true.
 
 CI: `claude plugin validate . --strict` on ubuntu; pytest on ubuntu, windows
-and macos across Python 3.10 and 3.12.
+and macos across Python 3.11 and 3.12.
 
 ## 7. Rules carried over from graph-mempalace
 

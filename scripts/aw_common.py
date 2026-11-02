@@ -9,7 +9,7 @@ and the skills agree by construction on:
   * where the plugin keeps its own machine-level state (`~/.autoweb-plugin/`)
   * how an installed `autoweb` binary, `uv` and Python are found
 
-Standard library only, Python 3.10+ (the package's own floor). Configuration is
+Standard library only, Python 3.11+ (the package's own floor). Configuration is
 read through the shipped `autoweb.config` module, never parsed here, so the
 plugin and the CLI cannot disagree about a key. Nothing here writes into a
 project directory; the only writes are the plugin's own log and tool cache.

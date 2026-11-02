@@ -74,7 +74,8 @@ and ask which one.
      reason**; never report a value nobody read off a page; confirm `location.href`
      before asserting; carry the URL behind every fact;
    - its last action, before it finishes: call `browser_storage_state` with `filename`
-     set to `lane-<its number>.json` and report the path.
+     set to the bare name `lane-<its number>.json`, which lands in the project root
+     where the merge reads it, and report the path.
 
    Done when every independent piece of the work went to its own lane, in one message,
    and every lane has reported back.
@@ -88,7 +89,28 @@ and ask which one.
    either usable or re-dispatched, and no fabricated value has been carried forward —
    one fabricated value fails the whole run.
 
-7. Write the deliverable.
+7. Merge the lane states back onto `root.json`, once, after every lane has reported,
+   re-dispatched lanes included. Name the lane files the usable lanes reported writing,
+   and leave out any lane step 6 voided. Read the decisions first:
+
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" merge lane-1.json lane-3.json --dry-run
+   ```
+
+   A `REFUSED:` line or a non-zero exit means the real merge would lose part of the
+   identity: keep the output, skip the write, and report it. Otherwise read its
+   `evicted` lines, then write:
+
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" merge lane-1.json lane-3.json
+   ```
+
+   This writes `root.json` and keeps the previous one as `root.json.bak`. Report every
+   origin it lists as needing a fresh login. Lane files carry cookies and localStorage
+   only, so a login held in IndexedDB is not refreshed by a run. Done when the merge has
+   run once and its output is kept, or the reason it did not run is recorded.
+
+8. Write the deliverable.
 
    ```bash
    mkdir -p "runs/$(date +%F)-<goal>"
@@ -98,22 +120,24 @@ and ask which one.
    that directory. Beside it write `run-log.md` holding: how the work was split and which
    lane took which slice; each lane's dispatch text in short; the `state verify` output
    from step 3; each lane's reported facts with the URL behind each one; every blocked
-   sub-goal with its reason; and any lane that was re-dispatched and why. Done when both
-   the deliverable and `run-log.md` exist under `runs/<YYYY-MM-DD>-<goal>/`.
+   sub-goal with its reason; any lane that was re-dispatched and why; and the merge
+   output from step 7, or why it did not run. Done when both the deliverable and
+   `run-log.md` exist under `runs/<YYYY-MM-DD>-<goal>/`.
 
-8. Run the goal's own assertions, in the order `## Assertion` numbers them. Each one is
+9. Run the goal's own assertions, in the order `## Assertion` numbers them. Each one is
    deterministic by construction — a URL match, visible text, an element state, a file
    that must exist, or a shell command that exits 0 — so run the ones that are commands
    and check the ones that are observations against what the lanes reported with their
    URLs. Done when every numbered assertion has been evaluated.
 
-9. Report, one line per assertion: its number, what it checked, and PASS or FAIL with
-   the evidence — the exit code, the URL, the file path. Then one line for the run:
-   where the deliverable is, and how many assertions passed out of how many.
+10. Report, one line per assertion: its number, what it checked, and PASS or FAIL with
+    the evidence — the exit code, the URL, the file path. Then one line for the run:
+    where the deliverable is, and how many assertions passed out of how many.
 
-   **This is one pass. There is no loop.** Do not retry a failed assertion, re-plan
-   around it, or adjust the goal to make it pass. A failed assertion reported plainly is
-   the output; re-running is the user's call.
+    **This is one pass. There is no loop.** Do not retry a failed assertion, re-plan
+    around it, or adjust the goal to make it pass. A failed assertion reported plainly
+    is the output; re-running is the user's call.
 
 Complete when the goal's assertions have each been reported pass or fail, the deliverable
-and `run-log.md` are under `runs/<YYYY-MM-DD>-<goal>/`, and no retry was attempted.
+and `run-log.md` are under `runs/<YYYY-MM-DD>-<goal>/`, the merge ran once or the report
+says why it did not, and no retry was attempted.

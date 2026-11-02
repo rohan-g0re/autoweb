@@ -17,8 +17,10 @@ tests need the opposite - a one-line sh script that is NOT a working Python.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,7 +35,7 @@ PY_SH = str(PY_SH_PATH).replace("\\", "/")
 HOOKS_JSON = REPO / "hooks" / "hooks.json"
 GITATTRIBUTES = REPO / ".gitattributes"
 
-NO_PYTHON_NOTICE = "no Python >= 3.10 found"
+NO_PYTHON_NOTICE = "no Python >= 3.11 found"
 
 PROBE = """import sys
 print("PYVER %d.%d" % (sys.version_info[0], sys.version_info[1]))
@@ -130,7 +132,7 @@ def make_sh_script():
 def too_old(tmp_path, make_sh_script):
     """An interpreter that fails py.sh's version probe, as a 3.9 would.
 
-    The probe is `python -c 'sys.exit(0 if version_info >= (3, 10) else 1)'`, so
+    The probe is `python -c 'sys.exit(0 if version_info >= (3, 11) else 1)'`, so
     anything that exits non-zero is indistinguishable from an old interpreter -
     including the Windows Store stub, which is the case that actually happens.
     """
@@ -168,7 +170,7 @@ def test_py_sh_does_not_need_the_exec_bit_or_its_shebang(tmp_path, home, probe):
 # ------------------------------------------------------------------ discovery
 
 @needs_bash
-def test_py_sh_runs_a_script_with_python_310_or_newer(home, probe):
+def test_py_sh_runs_a_script_with_python_311_or_newer(home, probe):
     """Rung 3, for real: one directory on PATH, the one holding this interpreter.
 
     PATH is replaced rather than inherited so the search cannot reach uv, and so
@@ -180,7 +182,7 @@ def test_py_sh_runs_a_script_with_python_310_or_newer(home, probe):
                    "PATH": fwd(Path(sys.executable).parent)})
     assert proc.returncode == 0, proc.stderr
     lines = printed(proc.stdout)
-    assert tuple(int(n) for n in lines["PYVER"].split(".")) >= (3, 10)
+    assert tuple(int(n) for n in lines["PYVER"].split(".")) >= (3, 11)
     assert lines["ARGS"] == "one two"
 
 
@@ -296,8 +298,25 @@ def test_the_no_python_notice_is_one_line_and_is_followed_by_exit_zero():
     assert len(hits) == 1
     notice = lines[hits[0]]
     assert ">&2" in notice
-    assert "aw-setup" in notice
+    # The hint is uv's installer, not /autoweb:aw-setup: that skill runs through
+    # py.sh too, so it cannot help a machine where py.sh found nothing.
+    assert "$AW_UV_HINT" in notice
+    assert "aw-setup" not in notice
     assert lines[hits[0] + 1].strip() == "exit 0"
+
+
+def test_the_no_python_hint_is_the_same_uv_installer_aw_setup_prints():
+    """py.sh cannot import aw_setup, so the two copies of uv's one-liners are held
+    together here. Read through `ast` rather than imported: aw_setup reconfigures
+    stdout at import time."""
+    tree = ast.parse((SCRIPTS / "aw_setup.py").read_text(encoding="utf-8"))
+    consts = {node.targets[0].id: ast.literal_eval(node.value)
+              for node in tree.body
+              if isinstance(node, ast.Assign) and len(node.targets) == 1
+              and isinstance(node.targets[0], ast.Name)
+              and node.targets[0].id in ("UV_INSTALL_WINDOWS", "UV_INSTALL_POSIX")}
+    hints = re.findall(r"AW_UV_HINT='([^']*)'", PY_SH_PATH.read_text(encoding="utf-8"))
+    assert hints == [consts["UV_INSTALL_WINDOWS"], consts["UV_INSTALL_POSIX"]]
 
 
 @needs_bash
@@ -325,7 +344,7 @@ def test_py_sh_exits_zero_when_no_python_can_be_found(home, probe, tmp_path):
     assert proc.returncode == 0
     assert proc.stdout == ""
     assert len(proc.stderr.strip().splitlines()) == 1
-    assert "aw-setup" in proc.stderr
+    assert "astral.sh/uv/install" in proc.stderr
 
 
 # ------------------------------------------------------------------- the hook

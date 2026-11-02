@@ -30,8 +30,10 @@ check as you go, then print the Phase 5 summary.
 
 Run these and record results. Do not fix anything yet.
 
-1. **Node ≥ 18** — `node -v`
-   `@playwright/mcp` declares `engines: { node: ">=18" }`. Below 18 is a hard stop.
+1. **Node ≥ 20** — `node -v`
+   `@playwright/mcp` declares `engines: { node: ">=18" }`, but the playwright-core 1.64
+   it bundles refuses to start on 18 ("Playwright requires Node.js 20 or higher").
+   Below 20 is a hard stop.
 
 2. **Config present** — does `.mcp.json` exist in the current directory with an
    `mcpServers.playwright` entry? Expected content:
@@ -70,7 +72,7 @@ Run these and record results. Do not fix anything yet.
 
 Act only on what Phase 1 found missing.
 
-1. **Node < 18 or absent** → STOP. Tell the user to install Node 18+ and re-run
+1. **Node < 20 or absent** → STOP. Tell the user to install Node 20+ and re-run
    `/autoweb:setup-playwright`. Do not attempt to install Node.
 
 2. **`.mcp.json` missing, or present without a playwright entry** → write exactly the

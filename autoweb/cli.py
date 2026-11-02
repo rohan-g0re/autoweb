@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import timezone
+from datetime import UTC
 from pathlib import Path
 
 from . import __version__, lanes, state, trace
@@ -437,7 +437,7 @@ def _cmd_trace(args: argparse.Namespace) -> int:
         declare them concurrent, which is correct and reads like a bug. Defined outside
         the loop so it cannot close over the loop variable.
         """
-        return (lane_trace.marks[mark].astimezone(timezone.utc)
+        return (lane_trace.marks[mark].astimezone(UTC)
                 .strftime("%H:%M:%S.%f")[:-3])
 
     for lane in verdict.lanes:
@@ -462,6 +462,32 @@ def _cmd_trace(args: argparse.Namespace) -> int:
         print("    no pair is cleanly sequential, so the lanes overlapped pairwise but "
               "never all at once. Give each lane a longer hold.", file=sys.stderr)
     return 1
+
+
+_LOST_SHOWN = 10
+
+
+def _print_refusals(result: merge_mod.MergeResult) -> bool:
+    """Print every reason `write_root` would refuse, one `REFUSED:` line each.
+
+    Printed in dry-run and real mode alike, because merge.py reports these on the result
+    precisely so that a dry run can show them. Returns whether there was any.
+    """
+    for violation in result.cap_violations:
+        print(f"REFUSED: {violation}", file=sys.stderr)
+    lost = result.lost_cookies
+    if lost:
+        # Can run to hundreds of rows (the CHIPS defect lost 737), so the count and the
+        # first few, the same cut write_root makes.
+        print(f"REFUSED: {len(lost)} cookie(s) in the ancestor are neither in the "
+              f"merged state nor counted as evicted, so this merge would lose them "
+              f"silently. This is a bug in autoweb.merge, not in your inputs.",
+              file=sys.stderr)
+        for entry in lost[:_LOST_SHOWN]:
+            print(f"REFUSED:   lost {entry}", file=sys.stderr)
+        if len(lost) > _LOST_SHOWN:
+            print(f"REFUSED:   ... and {len(lost) - _LOST_SHOWN} more", file=sys.stderr)
+    return bool(result.cap_violations or lost)
 
 
 def _cmd_merge(args: argparse.Namespace) -> int:
@@ -516,11 +542,20 @@ def _cmd_merge(args: argparse.Namespace) -> int:
         for origin in result.evicted_origins:
             print(f"    {origin}")
 
+    refused = _print_refusals(result)
+
     if args.dry_run:
         print()
         print("  --dry-run: nothing was written")
+        if refused:
+            # Same code as the real run's refusal. A dry run that exits 0 over a cap
+            # tells a script the write is safe to attempt, and it is not.
+            print("dry run: the real merge would refuse to write", file=sys.stderr)
+            return 2
         return 0
 
+    # Still the one place that refuses. The lines above say why; this raises the error
+    # that main turns into exit 2.
     write_path = merge_mod.write_root(root_path, result)
     print()
     print(f"  wrote {write_path} (previous kept as {write_path.name}.bak)")

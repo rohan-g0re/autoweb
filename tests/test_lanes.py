@@ -52,6 +52,44 @@ def test_frontmatter_is_valid_yaml(tmp_path):
     assert isinstance(fm["description"], str) and fm["description"]
 
 
+def test_frontmatter_carries_exactly_the_keys_we_mean_to_ship(tmp_path):
+    """An unknown key loads silently and does nothing, so a misspelt one would look
+    like a working lane. Pin the set, for both identity modes."""
+    for name, body in (("iso", ""), ("persistent", "[lanes]\nisolated = false\n")):
+        root = tmp_path / name
+        root.mkdir()
+        fm = frontmatter(lane_markdown(1, config_at(root, body)))
+        assert set(fm) == {"name", "description", "disallowedTools", "mcpServers"}
+
+
+def test_the_shared_browser_is_withheld_from_every_lane(tmp_path):
+    """`disallowedTools` removes the session's `playwright` server from the lane, so a
+    lane cannot land in the shared tab even by mistake. Claude Code documents it as a
+    list of tool patterns where a bare `mcp__<server>` withholds that whole server.
+
+    The entry must not reach the lane's own server either: `mcp__lane` would match
+    nothing today, but a pattern that did would leave the lane with no browser at all.
+    """
+    cfg = config_at(tmp_path, "[lanes]\nmax = 3\n")
+    for index in (1, 2, 3):
+        denied = frontmatter(lane_markdown(index, cfg))["disallowedTools"]
+        assert denied == ["mcp__playwright"], denied
+        own = f"mcp__{server_name(index)}__browser_click"
+        assert not any(own.startswith(rule) for rule in denied), denied
+
+
+def test_a_lane_is_told_where_its_state_file_goes(tmp_path):
+    """The merge reads `lane-<n>.json` from the project root. A lane that followed the
+    write-under-.playwright-mcp rule for this one file too would hide its state from
+    the merge, and root.json would never be refreshed."""
+    cfg = config_at(tmp_path, "[lanes]\nmax = 3\n")
+    body = lane_markdown(3, cfg)
+    assert "browser_storage_state" in body
+    assert "`lane-3.json`" in body
+    assert "project root" in body
+    assert "last browser call" in body
+
+
 def test_mcp_servers_is_a_list_not_a_mapping(tmp_path):
     """THE load-bearing assertion, and the one an earlier grep-based test missed.
 

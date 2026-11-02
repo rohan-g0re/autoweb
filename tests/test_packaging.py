@@ -12,15 +12,11 @@ machine you develop on already has everything installed. So the invariants get t
 
 from __future__ import annotations
 
-import sys
+import re
+import tomllib
 from pathlib import Path
 
 import pytest
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - 3.10 reads TOML through the backport
-    tomllib = pytest.importorskip("tomli")
 
 PYPROJECT = Path(__file__).parent.parent / "pyproject.toml"
 
@@ -81,10 +77,29 @@ def test_the_console_script_points_at_something_real(meta):
 def test_the_python_floor_matches_the_syntax_actually_used(meta):
     """`requires-python` is a promise. Breaking it means an install that works and a
     crash on first run, on exactly the machines least able to debug it."""
-    assert meta["project"]["requires-python"] == ">=3.10"
-    # tomllib arrived in 3.11, so 3.10 needs the backport declared conditionally.
-    deps = " ".join(meta["project"]["dependencies"])
-    assert "tomli>=2.0" in deps and "python_version < '3.11'" in deps
+    assert meta["project"]["requires-python"] == ">=3.11"
+    # 3.11 is the floor because tomllib is stdlib from 3.11 on. A 3.10 with no
+    # `tomli` installed - a plain Ubuntu 22.04 python3 - tracebacked on import.
+    classifiers = [c for c in meta["project"]["classifiers"]
+                   if c.startswith("Programming Language :: Python :: 3.")]
+    assert classifiers == [
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+    ]
+    assert meta["tool"]["ruff"]["target-version"] == "py311"
+
+
+def test_reading_toml_needs_no_third_party_package(meta):
+    """`tomli` is the 3.10 backport of `tomllib`. With the floor at 3.11 it must not
+    come back, as a dependency or as a fallback import: either one is a second code
+    path that only runs on an interpreter the package no longer supports."""
+    names = [re.split(r"[\s<>=!~;\[]", d, maxsplit=1)[0].lower()
+             for d in meta["project"]["dependencies"]]
+    assert "tomli" not in names
+    config = (PYPROJECT.parent / "autoweb" / "config.py").read_text(encoding="utf-8")
+    assert re.search(r"^import tomllib$", config, re.MULTILINE)
+    assert not re.search(r"\bimport tomli\b", config)
 
 
 def test_nothing_in_the_wheel_config_ships_the_tests(meta):

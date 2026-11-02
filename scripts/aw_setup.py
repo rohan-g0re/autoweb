@@ -8,9 +8,9 @@ Three jobs, one script, because they answer the same question in three voices:
 
 What has to be true before a lane opens a browser:
 
-    python >= 3.10        the package floor; this is the interpreter running now
+    python >= 3.11        the package floor; this is the interpreter running now
     uv                    how the package and its playwright dependency arrive
-    node >= 18            @playwright/mcp is a Node package, run through npx
+    node >= 20            the playwright-core that @playwright/mcp bundles refuses 18
     playwright mcp        the pinned MCP server, warm in the npx cache or not
     autoweb cli           the installed binary, or the package run in place
     playwright package    needed by `state export` and `state verify`, nothing else
@@ -78,8 +78,8 @@ from pathlib import Path  # noqa: E402
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
-MIN_PYTHON = (3, 10)
-MIN_NODE = 18
+MIN_PYTHON = (3, 11)
+MIN_NODE = 20
 
 # Labels are a contract with docs/PLUGIN-DESIGN.md section 5.4 and with the
 # skills that grep this table. Changing one is a documentation change.
@@ -118,7 +118,7 @@ UV_INSTALL_POSIX = "curl -LsSf https://astral.sh/uv/install.sh | sh"
 
 NODE_INSTALL_WINDOWS = "winget install OpenJS.NodeJS.LTS"
 NODE_INSTALL_MACOS = "brew install node"
-NODE_INSTALL_LINUX = ("install Node 18 or newer from https://nodejs.org "
+NODE_INSTALL_LINUX = (f"install Node {MIN_NODE} or newer from https://nodejs.org "
                       "(or your package manager)")
 
 INSTALL_FIX = "run --install"

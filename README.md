@@ -31,7 +31,7 @@ In Claude Code. The first two lines run once ever; the third once per machine:
 /autoweb:aw-setup
 ```
 
-It checks Python 3.10+, [uv](https://docs.astral.sh/uv/), Node 20+, the pinned
+It checks Python 3.11+, [uv](https://docs.astral.sh/uv/), Node 20+, the pinned
 `@playwright/mcp` and a browser, and with your say-so installs the `autoweb` CLI and a
 Chromium. Run it again inside each project you automate; that run only needs the project
 step, `--init-project`.

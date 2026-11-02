@@ -457,6 +457,82 @@ def test_a_dry_run_merge_writes_nothing_and_warns_about_nothing(hermetic_git, ca
     assert "WARNING" not in capsys.readouterr().err
 
 
+# --- merge refusals, shown before anything is written ------------------------
+# merge.py reports cap violations and lost cookies on the result so that --dry-run can
+# show them. A dry run that exits 0 over a cap tells a script the write is safe.
+
+
+def _merge_inputs(project, root_cookies):
+    write_state(project / "root.json", cookies=root_cookies)
+    write_state(project / "lane-1.json", cookies=[COOKIE])
+    return str(project / "lane-1.json")
+
+
+def test_a_dry_run_over_a_cap_exits_2_and_names_the_violation(project, capsys):
+    (project / "autoweb.toml").write_text("[caps]\ntotal_bytes = 10\n", encoding="utf-8")
+    lane = _merge_inputs(project, [COOKIE])
+    assert run(["merge", "--dry-run", lane], project) == 2
+    out, err = capsys.readouterr()
+    assert "--dry-run: nothing was written" in out
+    assert "REFUSED: the merged state would be" in err
+    assert "caps.total_bytes limit of 10" in err
+    assert "dry run: the real merge would refuse to write" in err
+    assert not (project / "root.json.bak").exists()
+
+
+def test_a_dry_run_that_would_lose_cookies_exits_2_and_lists_them(project, capsys):
+    """Two root rows this module cannot tell apart, as in
+    test_a_key_that_arrives_twice_refuses_the_write."""
+    lane = _merge_inputs(project, [dict(COOKIE), dict(COOKIE)])
+    assert run(["merge", "--dry-run", lane], project) == 2
+    err = capsys.readouterr().err
+    assert "REFUSED: 1 cookie(s) in the ancestor are neither in the merged state" in err
+    assert "REFUSED:   lost sid on .x.example/: 2 row(s) in, 1 out" in err
+    assert "dry run: the real merge would refuse to write" in err
+
+
+def test_a_long_list_of_lost_cookies_is_cut_to_the_first_few(project, monkeypatch,
+                                                             capsys):
+    real = cli.merge_mod.merge_files
+
+    def lossy(*a, **kw):
+        result = real(*a, **kw)
+        result.lost_cookies = [f"c{i} on .x.example/: 1 row(s) in, 0 out"
+                               for i in range(25)]
+        return result
+    monkeypatch.setattr(cli.merge_mod, "merge_files", lossy)
+    lane = _merge_inputs(project, [COOKIE])
+    assert run(["merge", "--dry-run", lane], project) == 2
+    err = capsys.readouterr().err
+    assert "REFUSED: 25 cookie(s)" in err
+    assert "lost c9 on" in err
+    assert "lost c10 on" not in err
+    assert "REFUSED:   ... and 15 more" in err
+
+
+def test_a_clean_dry_run_still_exits_0_and_refuses_nothing(project, capsys):
+    lane = _merge_inputs(project, [COOKIE])
+    assert run(["merge", "--dry-run", lane], project) == 0
+    out, err = capsys.readouterr()
+    assert "--dry-run: nothing was written" in out
+    assert "REFUSED:" not in out + err
+    assert "would refuse" not in out + err
+
+
+def test_a_real_merge_over_a_cap_still_exits_2_and_prints_the_violation(project,
+                                                                        capsys):
+    (project / "autoweb.toml").write_text("[caps]\ntotal_bytes = 10\n", encoding="utf-8")
+    lane = _merge_inputs(project, [COOKIE])
+    before = (project / "root.json").read_bytes()
+    assert run(["merge", lane], project) == 2
+    err = capsys.readouterr().err
+    assert "REFUSED: the merged state would be" in err
+    assert "error: refusing to write:" in err
+    assert "dry run:" not in err
+    assert (project / "root.json").read_bytes() == before
+    assert not (project / "root.json.bak").exists()
+
+
 # --- trace, the simultaneity gate -------------------------------------------
 
 

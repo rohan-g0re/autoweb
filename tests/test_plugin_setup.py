@@ -21,15 +21,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python 3.10 only
-    import tomli as tomllib
 
 from autoweb.config import CapsConfig, Config, LaneConfig, StateConfig
 from autoweb.lanes import GENERATED_MARKER
@@ -40,9 +36,9 @@ WINDOWS = os.name == "nt"
 # aw-setup and aw-doctor skills read these rows, so renaming one is a
 # documentation change and this list is where that shows up.
 EXPECTED_CHECKS = [
-    "python >= 3.10",
+    "python >= 3.11",
     "uv",
-    "node >= 18",
+    "node >= 20",
     "playwright mcp 0.0.83",
     "autoweb cli",
     "playwright package",
@@ -211,7 +207,7 @@ def test_a_note_never_fails_the_run(s, capsys, monkeypatch):
 
 def test_the_interpreter_running_the_suite_passes_the_python_check(s, capsys):
     _, rep = report(s, capsys)
-    check = row(rep, "python >= 3.10")
+    check = row(rep, "python >= 3.11")
     assert check["ok"] is True
     assert s.mod.fwd(sys.executable) in check["detail"]
 
@@ -238,7 +234,7 @@ def test_uv_is_found_on_path_with_its_location(s, capsys):
 def test_a_new_enough_node_passes_with_its_version_and_path(s, capsys):
     node = s.install("node", stdout="v20.11.1\n")
     _, rep = report(s, capsys)
-    check = row(rep, "node >= 18")
+    check = row(rep, "node >= 20")
     assert check["ok"] is True
     assert "v20.11.1" in check["detail"]
     assert s.mod.fwd(node) in check["detail"]
@@ -248,11 +244,28 @@ def test_a_new_enough_node_passes_with_its_version_and_path(s, capsys):
 def test_an_old_node_fails_and_names_the_version_it_found(s, capsys):
     s.install("node", stdout="v16.20.2\n")
     _, rep = report(s, capsys)
-    check = row(rep, "node >= 18")
+    check = row(rep, "node >= 20")
     assert check["ok"] is False
     assert "v16.20.2" in check["detail"]
     assert "too old" in check["detail"]
     assert check["fix"] == s.mod.node_install_hint()
+
+
+def test_node_18_fails_because_the_bundled_playwright_core_refuses_it(s, capsys):
+    """@playwright/mcp declares `node >= 18`, but the playwright-core 1.64 it bundles
+    exits with "Playwright requires Node.js 20 or higher" on 18.19.1. The check
+    follows what actually runs, not what the manifest claims."""
+    s.install("node", stdout="v18.19.1\n")
+    _, rep = report(s, capsys)
+    check = row(rep, "node >= 20")
+    assert check["ok"] is False
+    assert "v18.19.1" in check["detail"]
+    assert "need 20" in check["detail"]
+
+
+def test_the_linux_node_hint_names_the_same_floor_as_the_check(s):
+    assert f"Node {s.mod.MIN_NODE} or newer" in s.mod.NODE_INSTALL_LINUX
+    assert s.mod.MIN_NODE == 20
 
 
 def test_a_node_that_cannot_run_fails_rather_than_raising(s, capsys, tmp_path,
@@ -261,13 +274,13 @@ def test_a_node_that_cannot_run_fails_rather_than_raising(s, capsys, tmp_path,
     s.aw._FIND_TOOL_CACHE.clear()
     _, rep = report(s, capsys)
     # The override names a file that does not exist, so discovery finds nothing.
-    assert row(rep, "node >= 18")["ok"] is False
+    assert row(rep, "node >= 20")["ok"] is False
 
 
 def test_a_node_that_prints_nothing_fails(s, capsys):
     s.install("node", stdout="")
     _, rep = report(s, capsys)
-    check = row(rep, "node >= 18")
+    check = row(rep, "node >= 20")
     assert check["ok"] is False
     assert "did not run" in check["detail"] or "no version" in check["detail"]
 

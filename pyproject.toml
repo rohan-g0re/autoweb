@@ -3,25 +3,24 @@ name = "autoweb"
 version = "0.2.0"
 description = "A stub for web automation. Not a framework."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "AutoWeb contributors" }]
 keywords = ["browser-automation", "playwright", "mcp", "agents", "llm"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "License :: OSI Approved :: Apache Software License",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
   # Browser control. Needed for the one operation MCP cannot do:
   # storageState({indexedDB: True}). See docs/STORAGE-EXPORT.md.
   "playwright>=1.51",
-  # TOML writing (reading uses stdlib tomllib on 3.11+).
+  # TOML writing. Reading is stdlib tomllib, which is why the floor is 3.11.
   "tomli-w>=1.0",
-  "tomli>=2.0 ; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -50,7 +49,7 @@ packages = ["autoweb"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

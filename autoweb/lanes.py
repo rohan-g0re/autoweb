@@ -140,6 +140,12 @@ def lane_markdown(index: int, cfg: Config) -> str:
     failures look identical from inside a lane - one browser, shared tabs - so a test
     parses the frontmatter instead of grepping it.
 
+    ``disallowedTools: ["mcp__playwright"]`` removes the session's shared server from
+    the lane, rather than only asking the lane not to call it. Claude Code documents a
+    bare ``mcp__<server>`` entry there as withholding every tool of that server. The
+    body still warns in prose, because a plugin-installed server carries another name
+    and the frontmatter entry does not reach it.
+
     What a lane is told about its identity depends on `isolated`. An isolated lane is
     seeded from `root.json`; a persistent lane carries only its own profile and a fresh
     one starts logged out. Saying otherwise sends it hunting for a session it does not
@@ -162,6 +168,7 @@ name: {LANE_PREFIX}{index}
 description: Browser lane {index}. Use when work has been split across parallel \
 browser lanes and this lane number was assigned. Drives its own browser, \
 {identity}.
+disallowedTools: ["mcp__playwright"]
 mcpServers:
   - {server}:
       type: stdio
@@ -176,10 +183,10 @@ mcpServers:
 You own one browser. No other lane can see your tabs, your cookies or your storage,
 and you cannot see theirs. {standing}
 
-**Use only your own `mcp__{server}__*` tools.** Tools named `mcp__playwright__*` may
-also be visible. Those are the orchestrator's one shared browser, and touching them
-puts you in the same tab as every other lane, which is what this lane exists to
-avoid.
+**Use only your own `mcp__{server}__*` tools.** Any other browser tools you can see,
+such as `mcp__playwright__*`, belong to the orchestrator's one shared browser, and
+touching them puts you in the same tab as every other lane, which is what this lane
+exists to avoid.
 
 ## Work
 
@@ -223,8 +230,10 @@ dropped `lane2-search.yml` and `lane4-notif.yml` there, untracked and unignored,
 puts a file holding whatever was on a logged-in page one `git add -A` away from a public
 repository.
 
-The one exception is the state file a goal document names, which that document places
-deliberately.
+The one exception is your state file. The orchestrator may ask you to call
+`browser_storage_state` with `filename` set to `{LANE_PREFIX}{index}.json`. Pass that bare
+name exactly: it resolves against the project root, which is where the merge reads it.
+Make it your last browser call, and report the path it wrote.
 
 ## Report
 

@@ -7,11 +7,10 @@ design rules for the package; this file is how to write to them.
 
 ## Scripts (`scripts/*.py`, `scripts/*.sh`)
 
-- [ ] Python 3.10 or newer, standard library only. Reason: 3.10 is the package's
-      `requires-python` floor, so a script that needs 3.11 breaks an install the
-      packaging promises works. A third-party import in a hook is a failure mode on a
-      machine we do not control. Note `tomllib` arrived in 3.11: read config through
-      `autoweb.config`, never directly.
+- [ ] Python 3.11 or newer, standard library only. Reason: 3.11 is the package's
+      `requires-python` floor, chosen because it is the first with `tomllib`, so no
+      script and no hook needs a third-party import on a machine we do not control.
+      Read config through `autoweb.config`, never directly.
 - [ ] Every path, name, project test and tool lookup goes through `aw_common`. Reason:
       the hook, the launcher, setup and doctor have to agree by construction, not by
       four copies of the same string.

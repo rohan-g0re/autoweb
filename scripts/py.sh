@@ -1,11 +1,13 @@
 #!/bin/sh
-# py.sh - find a Python 3.10 or newer, then run a bundled script with it.
+# py.sh - find a Python 3.11 or newer, then run a bundled script with it.
 #
 #   bash py.sh /path/to/script.py [args...]
 #
-# 3.10, not 3.11: that is the `autoweb` package's own floor (pyproject.toml
-# requires-python = ">=3.10"), and a launcher that demands more than the package
-# does would refuse to run on a machine the package supports.
+# 3.11: that is the `autoweb` package's own floor (pyproject.toml
+# requires-python = ">=3.11", the first release with `tomllib` in the standard
+# library). A launcher that accepts less hands the hooks an interpreter that
+# cannot read autoweb.toml; one that demands more than the package does would
+# refuse to run on a machine the package supports.
 #
 # Hooks fire on every session start, so this has to be cheap, and it has to work
 # on machines where the obvious lookup fails:
@@ -26,13 +28,13 @@
 #     shell builtins only. No mkdir, no tr, no sed. The cache file is written by
 #     the interpreter that just passed the probe.
 #
-# Search order, first candidate that reports version >= 3.10 wins:
+# Search order, first candidate that reports version >= 3.11 wins:
 #
 #   1. $AW_PYTHON                                     explicit override
 #   2. ${AW_HOME:-$HOME}/.autoweb-plugin/python_path   what won last time
 #   3. PATH names: python, py -3, python3 on Windows; python3, python elsewhere
 #   4. uv:  ~/.local/bin/uv[.exe], then uv on PATH
-#           -> uv run --no-project --python >=3.10 python
+#           -> uv run --no-project --python >=3.11 python
 #   5. absolute interpreters: /c/Windows/py.exe -3, the Python installer's
 #      per-user directory, uv's downloaded builds, /usr/bin, /usr/local/bin,
 #      /opt/homebrew/bin
@@ -55,7 +57,7 @@
 
 AW_STATE="${AW_HOME:-$HOME}/.autoweb-plugin"
 AW_CACHE="$AW_STATE/python_path"
-AW_PROBE='import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'
+AW_PROBE='import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)'
 
 if [ "$#" -eq 0 ]; then
     printf '%s\n' 'autoweb: usage: bash py.sh <script.py> [args...]' >&2
@@ -76,7 +78,7 @@ if [ ! -f "$AW_SCRIPT" ]; then
     exit 0
 fi
 
-# Accept a candidate only when it really is Python 3.10+. Every byte of output is
+# Accept a candidate only when it really is Python 3.11+. Every byte of output is
 # discarded: the Windows Store stub prints an advert, and a hook's stdout is
 # injected into the session.
 aw_try() {
@@ -207,22 +209,22 @@ if [ -z "$AW_PY" ]; then
     done
 fi
 
-# 4. uv, by absolute path first. It downloads a private 3.10+ on demand, so it
+# 4. uv, by absolute path first. It downloads a private 3.11+ on demand, so it
 #    works on a machine with no system Python at all. Costs ~700 ms per call.
 if [ -z "$AW_PY" ]; then
     for aw_uv in "$HOME/.local/bin/uv" "$HOME/.local/bin/uv.exe"; do
         [ -f "$aw_uv" ] || continue
-        if aw_try "$aw_uv" run --no-project --python ">=3.10" python; then
+        if aw_try "$aw_uv" run --no-project --python ">=3.11" python; then
             AW_PY="$aw_uv"
-            AW_PYARG="run --no-project --python >=3.10 python"
+            AW_PYARG="run --no-project --python >=3.11 python"
             break
         fi
     done
 fi
 if [ -z "$AW_PY" ] && command -v uv >/dev/null 2>&1; then
-    if aw_try uv run --no-project --python ">=3.10" python; then
+    if aw_try uv run --no-project --python ">=3.11" python; then
         AW_PY="uv"
-        AW_PYARG="run --no-project --python >=3.10 python"
+        AW_PYARG="run --no-project --python >=3.11 python"
     fi
 fi
 
@@ -254,8 +256,19 @@ if [ -z "$AW_PY" ]; then
     done
 fi
 
+# Nothing found. The hint is uv's own installer, not /autoweb:aw-setup: that
+# skill runs through this launcher too, so pointing at it sends the user round in
+# a circle. Once uv is in ~/.local/bin, rung 4 above downloads a private 3.11+ on
+# the next session start. The two strings are uv's official one-liners and must
+# match UV_INSTALL_WINDOWS / UV_INSTALL_POSIX in aw_setup.py; a test holds them
+# together, because this file cannot import Python.
 if [ -z "$AW_PY" ]; then
-    printf '%s\n' 'autoweb: no Python >= 3.10 found; run /autoweb:aw-setup' >&2
+    if aw_is_windows; then
+        AW_UV_HINT='powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'
+    else
+        AW_UV_HINT='curl -LsSf https://astral.sh/uv/install.sh | sh'
+    fi
+    printf 'autoweb: no Python >= 3.11 found; install uv with `%s`, then start a new session\n' "$AW_UV_HINT" >&2
     exit 0
 fi
 

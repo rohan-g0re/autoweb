@@ -104,11 +104,15 @@ product page, with the URL you read it from" is checkable.
 ## A lane that uses your tools is not isolated
 
 This is the one failure that undoes everything above, and it was measured rather than
-guessed. A lane can see your own `mcp__playwright__*` tools alongside its own
+guessed. A lane could see your own `mcp__playwright__*` tools alongside its own
 `mcp__laneN__*` ones. Yours belong to the session's single shared browser, so a lane
 that calls them lands in the same tab as every other lane that did the same, and the
-lanes then navigate each other's pages. The generated lane body forbids it in writing,
-but the tools are still visible to the lane.
+lanes then navigate each other's pages.
+
+The generated lane file lists `mcp__playwright` under `disallowedTools`, which
+Claude Code documents as withholding every tool of that server (docs read 2026-11-01;
+not yet measured in a lane run). A shared server under any other name, such as a
+plugin-installed one, is not covered, and the lane body only forbids it in writing.
 
 So when a lane reports that it used `mcp__playwright__*`, it has invalidated its own
 isolation and anything it says about which page it was on is unreliable. Treat that run
@@ -127,21 +131,30 @@ So the last thing you ask a lane to do, before it finishes, is save its own stat
 > `lane-<your number>.json`. Do this as your final action, after everything else, and
 > report the path it wrote.
 
-Then, once **every** lane has reported and none is still running, read the decisions
-before writing anything:
+That bare name resolves against the project root, which is where the merge reads it.
+It is the one file a lane writes outside `.playwright-mcp/`. Lane files carry cookies
+and localStorage only (read from the `@playwright/mcp@0.0.83` source), so a login held
+in IndexedDB is not refreshed by a run.
+
+Then merge once, after **every** lane has reported, re-dispatched lanes included. Name
+the lane files the usable lanes reported writing, and leave out any lane whose run was
+void. Read the decisions before writing anything:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" merge lane-1.json lane-3.json --dry-run
 ```
 
-and only then write:
+A `REFUSED:` line or a non-zero exit means the real merge would lose part of the
+identity: keep the output, skip the write, and report it. Otherwise read its `evicted`
+lines, and only then write:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" merge lane-1.json lane-3.json
 ```
 
-That second command writes `root.json` and keeps a `.bak`. One writer, after every lane
-is dead. Two merges racing on `root.json` is how you get a file that is valid JSON and
+That second command writes `root.json` and keeps the previous one as `root.json.bak`.
+Report every origin it lists as needing a fresh login. One writer, after every lane is
+dead. Two merges racing on `root.json` is how you get a file that is valid JSON and
 nobody's session.
 
 Read the dry run rather than skipping to the write. It prints a line per origin, and the
@@ -188,7 +201,7 @@ actually loaded the page.
 - Every lane saved its own state with `browser_storage_state` as its last action,
   before its browser closed.
 - The merge ran once, after every lane was finished, and its `evicted` lines were
-  read rather than skipped.
+  read rather than skipped, or the report says why it did not run.
 
 ## If there are no lanes
 

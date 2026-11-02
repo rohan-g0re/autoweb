@@ -17,16 +17,11 @@ from __future__ import annotations
 
 import json
 import re
-import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 import yaml
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - 3.10 reads TOML through the backport the package declares
-    tomllib = pytest.importorskip("tomli")
 
 REPO = Path(__file__).resolve().parent.parent
 PLUGIN_JSON = REPO / ".claude-plugin" / "plugin.json"

@@ -26,15 +26,10 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
-
-try:  # pragma: no cover - trivial import shim
-    import tomllib  # Python 3.11+
-except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib  # type: ignore[no-redef]
-
 
 CONFIG_FILENAME = "autoweb.toml"
 STATE_DIRNAME = ".autoweb"

@@ -37,7 +37,8 @@ the seam sits**, and the rule is: *there is exactly one seam.*
   that must outlive a call, e.g. a browser pool.
 
 Minimum versions, non-negotiable on Windows: `mcp` **≥ 1.6.0** (below that
-`command="npx"` cannot resolve at all), Python ≥ 3.10. See `docs/CONSTRAINTS.md` §9
+`command="npx"` cannot resolve at all), Python ≥ 3.11 (the first with `tomllib` in
+the standard library), Node ≥ 20. See `docs/CONSTRAINTS.md` §9
 for the 2.x rename list and the child-env allowlist.
 
 ## Design rules
