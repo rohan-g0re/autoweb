@@ -176,14 +176,21 @@ class OriginRule:
     like a replay attack, and the server is entitled to revoke the whole family,
     logging out every lane at once. Discovered by the loop when a cookie value changes
     mid-run; set by hand if you already know.
+
+    It is also the one thing that makes ``autoweb merge`` evict. Anywhere else, lanes
+    that changed one value differently get the most recently issued copy kept; on a
+    ``rotates`` host the conflict drops the host's cookies and storage together, so the
+    re-login is forced now rather than found by the next run. No conflict, no eviction.
     """
 
     sticky: bool = False
-    """Never evict this origin, whatever the caps say.
+    """Never evict this origin.
 
-    Set when dropping an origin has been observed to force a re-login. Some apps keep
-    cryptographic keys client-side in IndexedDB (WhatsApp Web, Matrix/Element) where
-    eviction does not merely log you out, it unpairs the device.
+    Only a ``rotates`` host is ever evicted, so this only matters there: a host that is
+    both sticky and rotates has its conflicts resolved by recency, like any other host.
+    Set when dropping an origin has been observed to cost more than a re-login. Some
+    apps keep cryptographic keys client-side in IndexedDB (WhatsApp Web, Matrix/Element)
+    where eviction does not merely log you out, it unpairs the device.
     """
 
 

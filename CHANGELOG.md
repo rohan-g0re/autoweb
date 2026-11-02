@@ -13,6 +13,12 @@ package agree.
 
 ### Added
 
+- A second plugin in this marketplace, `autoweb-loop` 0.1.0, at `plugins/autoweb-loop/`
+  and installed on its own as `autoweb-loop@autoweb`. It adds `/autoweb-loop:aw-loop` and
+  a Stop hook that re-runs a goal until every assertion in its `status.json` passes or a
+  cap is hit. Experimental: not yet proven in a live session. `autoweb` itself is
+  unchanged and still has no Stop hook. Its tests run in this suite (`testpaths`), and a
+  root test holds its `scripts/py.sh` to this one but for the message prefix.
 - `autoweb goal check <goal.md> --run <run-id> [--root PATH] [--dry-run]`. It reads the
   `toml` block under a goal's `## Assertions` heading, evaluates each
   `[[assert]]` (`url`, `text` and `element` in a fresh headless browser seeded from
@@ -39,6 +45,30 @@ package agree.
   project of every user, including projects that never ran AutoWeb. The plugin now ships
   no MCP server. Projects that relied on it run `/autoweb:aw-setup` once and restart the
   session.
+- `autoweb goal check` is what a loop plugin reads: `runs/<id>/status.json` is the
+  contract between the two plugins, and nothing in `autoweb` references the loop.
+
+### Changed (merge)
+
+- `autoweb merge` no longer evicts a whole host when lanes change one value differently.
+  It keeps the most recently issued value: later cookie `expires` first (session cookies
+  rank lowest), then the lane file saved last. localStorage and IndexedDB use save time
+  only. Each pick is printed as a `resolved:` line.
+- Eviction now happens only on hosts marked `rotates = true` in `autoweb.toml`, where a
+  conflict still drops cookies and storage together. `sticky` still overrides it, so a
+  host that is both is resolved by recency.
+- IndexedDB is merged per database and per object store. Lanes that changed different
+  databases no longer conflict.
+- `MergeResult.rotating_violations` and `MergeResult.volatile_conflicts` are gone,
+  replaced by `MergeResult.resolved`. `merge()` takes a new optional `saved_at` argument.
+
+### Removed (merge)
+
+- The bot-management allowlist (`VOLATILE_COOKIE_NAMES`, `VOLATILE_STORAGE_MARKERS` and
+  helpers). Any per-browser cookie it lacked, such as Google `SIDCC`, GA4 `_ga_*` or
+  Datadog `_dd_s`, could sign the identity out on a read-only run.
+- The "touched by N lanes" warning for `rotates` hosts. It fired on every multi-lane
+  run, because isolated lanes export every root cookie.
 
 ### Changed
 

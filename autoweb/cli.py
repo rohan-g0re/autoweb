@@ -513,14 +513,12 @@ def _cmd_merge(args: argparse.Namespace) -> int:
         # cookie with a later expiry, and the merge did take the longest-lived copy.
         print(f"           {result.cookies_refreshed} of the kept ones had only their "
               f"expiry extended, so they are not counted as updated")
-    if result.volatile_conflicts:
+    if result.resolved:
+        # Lanes changed one value differently and the most recently issued copy was kept.
+        # Printed per value: a pick nobody can see is a guess nobody can check.
         print()
-        print("  lanes disagreed on these and it was ignored on purpose - every browser "
-              "mints")
-        print("  its own, so N browsers always produce N values and none of them is a "
-              "credential:")
-        for host, names in sorted(result.volatile_conflicts.items()):
-            print(f"    {host}: {', '.join(names)}")
+        for line in result.resolved:
+            print(f"  resolved: {line}")
     print()
     for decision in result.decisions:
         who = f"  [{', '.join(decision.changed_by)}]" if decision.changed_by else ""
@@ -530,12 +528,6 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     print()
     print(f"  {len(result.state['origins'])} origins, "
           f"{_human_bytes(result.total_bytes)} total")
-
-    for violation in result.rotating_violations:
-        # Loud, and on stderr, because this is the arrangement that gets a whole token
-        # family revoked. Not fatal: the damage, if any, has already happened.
-        print(f"  warning: {violation}. A site marked `rotates` should only ever be "
-              f"held by one lane.", file=sys.stderr)
 
     if result.evicted_origins:
         print()

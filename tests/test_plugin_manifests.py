@@ -32,6 +32,10 @@ HOOKS_JSON = REPO / "hooks" / "hooks.json"
 PYPROJECT = REPO / "pyproject.toml"
 SKILLS_DIR = REPO / "skills"
 COMMANDS_DIR = REPO / "commands"
+LOOP_DIR = REPO / "plugins" / "autoweb-loop"
+
+# The marketplace's plugins, by entry name, and where each one's source must point.
+MARKETPLACE_PLUGINS = {"autoweb": "./", "autoweb-loop": "./plugins/autoweb-loop"}
 
 # Skills that orchestrate rather than inform. They are typed by a user as
 # /autoweb:<name> and must not fire on their own.
@@ -99,21 +103,93 @@ def test_the_plugin_manifest_carries_what_makes_it_load():
     assert isinstance(data["author"], dict) and data["author"].get("name")
 
 
-def test_the_marketplace_entry_points_at_this_repository():
-    """This repository doubles as its own marketplace, so the single entry has to name
-    the plugin that lives beside it and resolve to the repository root. A `source` that
-    is not `./` installs something else, or nothing."""
+def test_the_marketplace_lists_exactly_the_two_plugins_of_this_repository():
+    """This repository is the marketplace for two plugins: `autoweb` at the root and
+    `autoweb-loop` under `plugins/`. A `source` that points anywhere else installs
+    something else, or nothing, and an extra or missing entry is a plugin users can or
+    cannot install by accident."""
     market = _json(MARKETPLACE_JSON)
-    plugin_name = _json(PLUGIN_JSON)["name"]
-    assert market["name"] == plugin_name
+    assert market["name"] == _json(PLUGIN_JSON)["name"]
     assert market["owner"]["name"]
-    entries = market["plugins"]
-    assert len(entries) == 1, f"expected exactly one plugin entry, found {len(entries)}"
-    (entry,) = entries
-    assert entry["name"] == plugin_name
-    assert entry["source"] == "./"
-    assert entry["category"]
-    assert entry["description"]
+    entries = {entry["name"]: entry for entry in market["plugins"]}
+    assert len(entries) == len(market["plugins"]), "two entries share a name"
+    assert {name: e["source"] for name, e in entries.items()} == MARKETPLACE_PLUGINS
+    for entry in entries.values():
+        assert entry["category"]
+        assert entry["description"]
+    assert entries["autoweb-loop"]["description"].endswith(
+        "Experimental: not yet proven in a live session."
+    )
+
+
+@pytest.mark.parametrize("name", sorted(MARKETPLACE_PLUGINS))
+def test_each_marketplace_source_holds_a_manifest_of_the_same_name(name):
+    """The entry name is the install id and the manifest name is the skill prefix. When
+    they differ, installing by the manifest name fails with `not found in marketplace`."""
+    source = REPO / MARKETPLACE_PLUGINS[name]
+    manifest = source / ".claude-plugin" / "plugin.json"
+    assert manifest.is_file(), f"{MARKETPLACE_PLUGINS[name]} has no .claude-plugin/plugin.json"
+    assert _json(manifest)["name"] == name
+    if source != REPO:
+        assert not (source / ".claude-plugin" / "marketplace.json").exists(), (
+            "only the repository root is a marketplace"
+        )
+
+
+@pytest.mark.parametrize("name", sorted(MARKETPLACE_PLUGINS))
+def test_every_hook_command_names_a_script_inside_its_own_plugin(name):
+    """A hook names its scripts through `${CLAUDE_PLUGIN_ROOT}`, which is that plugin's
+    own directory. A script that exists only in the other plugin is a hook that fails on
+    every event it is registered for."""
+    source = REPO / MARKETPLACE_PLUGINS[name]
+    hooks = source / "hooks" / "hooks.json"
+    if not hooks.is_file():
+        pytest.skip(f"{name} has no hooks")
+    named = []
+    for matchers in _json(hooks)["hooks"].values():
+        for matcher in matchers:
+            for hook in matcher["hooks"]:
+                named += re.findall(r'"\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"', hook["command"])
+    assert named, f"{name}: no hook command names a script through ${{CLAUDE_PLUGIN_ROOT}}"
+    for rel in named:
+        assert (source / rel).is_file(), f"{name}: hooks.json names {rel}, which is not there"
+
+
+def test_the_root_plugin_needs_no_exclusion_for_the_loop_plugin():
+    """The root plugin's source is `./`, so its cache copy holds `plugins/autoweb-loop`
+    too. Those files are inert there: Claude Code reads components only from the plugin
+    root's own `skills/`, `commands/`, `agents/` and `hooks/hooks.json` (and the paths
+    its plugin.json names), never from a nested `.claude-plugin/plugin.json`. No way to
+    exclude files from a plugin's copy is documented: the marketplace reference
+    (code.claude.com/docs/en/plugins/marketplace-reference, read 2026-11-01) offers
+    `sparsePaths` only on the user's marketplace source, not on a plugin. So nothing is
+    excluded, and this test holds the condition that makes that safe: the root plugin
+    declares no component path that reaches into `plugins/`."""
+    manifest = _json(PLUGIN_JSON)
+    for key in ("commands", "agents", "skills", "hooks", "mcpServers", "outputStyles"):
+        assert "plugins/" not in json.dumps(manifest.get(key, "")), key
+    assert "plugins/" not in HOOKS_JSON.read_text(encoding="utf-8")
+    assert not (REPO / "skills" / "aw-loop").exists(), "aw-loop belongs to autoweb-loop"
+
+
+def test_the_loop_py_sh_is_the_root_py_sh_but_for_its_message_prefix():
+    """Two plugins, two copies of the Python finder, because `${CLAUDE_PLUGIN_ROOT}` is a
+    different directory for each and neither may reach into the other. They are kept one
+    file in all but name: every code line must match once `autoweb-loop:` is read as
+    `autoweb:`. Comments may differ, so each can say where its remedy lives. A fix to one
+    that is not made to the other fails here."""
+    root = (REPO / "scripts" / "py.sh").read_text(encoding="utf-8").splitlines()
+    loop = (LOOP_DIR / "scripts" / "py.sh").read_text(encoding="utf-8").splitlines()
+
+    def code(lines):
+        return [line for line in lines if not line.lstrip().startswith("#")]
+
+    assert root[0] == loop[0] == "#!/bin/sh"
+    assert [line.replace("'autoweb-loop: ", "'autoweb: ") for line in code(loop)] == code(root)
+    messages = [line for line in code(loop) if "autoweb-loop: " in line]
+    assert len(messages) == 3 and all("printf" in line for line in messages), messages
+    assert not [line for line in code(loop) if "'autoweb: " in line]
+    assert "aw_setup.py" not in "\n".join(loop), "aw_setup.py ships only with autoweb"
 
 
 @pytest.mark.skipif(not HOOKS_JSON.is_file(), reason="hooks/hooks.json not written yet")

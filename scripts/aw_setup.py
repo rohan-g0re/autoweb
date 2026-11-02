@@ -1077,8 +1077,8 @@ def autoweb_toml_text() -> str:
         "#",
         "# [origins.\"example.com\"]",
         "# indexeddb = false   # this site's IndexedDB is large and worthless",
-        "# rotates   = true    # rotates tokens -> only ONE lane may hold it",
-        "# sticky    = true    # never evict; dropping it forces a re-login",
+        "# rotates   = true    # rotates tokens -> one lane only; a merge conflict evicts it",
+        "# sticky    = true    # never evict, even if rotates; recency resolves instead",
         "",
     ])
 

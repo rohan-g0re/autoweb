@@ -1,9 +1,11 @@
 """The merge decides what happens to a real person's logged-in sessions.
 
 So these tests are weighted towards what must NOT happen. A merge that loses a login
-costs a manual re-login; a merge that writes back a rotated refresh token can get a whole
-token family revoked and sign the user out everywhere, which is the expensive failure and
-the one the eviction rule exists for.
+costs a manual re-login, and the old rule - evict a host on any conflict - paid that cost
+on every multi-lane run, because lanes are separate browsers and disagree about values
+the browser mints for itself. A conflict now keeps the most recently issued value and
+says so. Eviction survives for a host marked `rotates = true`, where the user has said a
+forced re-login is the price they want.
 
 Every test states the damage it prevents, because in six months the rules will look
 over-cautious and somebody will be tempted to simplify them.
@@ -12,9 +14,12 @@ over-cautious and somebody will be tempted to simplify them.
 from __future__ import annotations
 
 import json
+import os
+from datetime import UTC, datetime
 
 import pytest
 
+from autoweb import cli
 from autoweb.config import Config
 from autoweb.merge import MergeError, merge, merge_files, write_root
 
@@ -46,6 +51,14 @@ def state(cookies=None, origins=None):
 def config_at(tmp_path, body=""):
     (tmp_path / "autoweb.toml").write_text(body, encoding="utf-8")
     return Config.load(tmp_path)
+
+
+ROTATES = '[origins."a.example"]\nrotates = true\n'
+T0 = 1790000000.0          # a lane file's save time; later lanes add seconds to it
+
+
+def iso(seconds):
+    return datetime.fromtimestamp(seconds, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # --- the clean cases --------------------------------------------------------
@@ -105,21 +118,100 @@ def test_a_deletion_is_never_propagated():
     assert ("other", "keep") in values
 
 
-def test_a_conflict_evicts_the_origin_instead_of_picking_a_winner():
-    """The expensive failure. One of the two values is a refresh token the server has
-    already rotated away, and presenting it can revoke the whole family."""
+def test_a_conflict_keeps_one_value_instead_of_evicting_the_host():
+    """The old rule evicted here, and on a real run that signed the identity out over
+    values no server had rotated. A value alone cannot say which kind it is, so the
+    host stays and the most recent value is kept."""
     root = state([cookie("sid", "old")],
                  [origin("https://www.a.example", {"t": "old"})])
     result = merge(root, {
         "lane-1": state([cookie("sid", "rotated-by-1")]),
         "lane-2": state([cookie("sid", "rotated-by-2")]),
-    })
+    }, saved_at={"lane-1": T0, "lane-2": T0 + 5})
+    assert result.evicted_origins == []
+    assert [c["value"] for c in result.state["cookies"]] == ["rotated-by-2"]
+    assert [o["origin"] for o in result.state["origins"]] == ["https://www.a.example"]
+    assert len(result.resolved) == 1
+
+
+def test_the_higher_expiry_wins_whatever_the_save_order():
+    """A server that keeps only its latest token issued that token last, and the latest
+    issue carries the latest expiry. Expiry outranks save time, so a lane that saved
+    late but holds the older token does not win."""
+    root = state([cookie("sid", "old", expires=1759000000)])
+    result = merge(root, {
+        "lane-1": state([cookie("sid", "newer", expires=1795000000)]),
+        "lane-2": state([cookie("sid", "older", expires=1794000000)]),
+    }, saved_at={"lane-1": T0, "lane-2": T0 + 60})
+    assert result.state["cookies"][0]["value"] == "newer"
+    assert result.state["cookies"][0]["expires"] == 1795000000
+    assert result.resolved == [(
+        f"a.example cookie sid kept lane-1's value (expires {iso(1795000000)} / "
+        f"saved {iso(T0)}) over lane-2's")]
+
+
+def test_equal_expiries_fall_back_to_the_later_save():
+    root = state([cookie("sid", "old")])
+    result = merge(root, {
+        "lane-1": state([cookie("sid", "first")]),
+        "lane-2": state([cookie("sid", "second")]),
+    }, saved_at={"lane-1": T0 + 9, "lane-2": T0})
+    assert result.state["cookies"][0]["value"] == "first"
+    assert "kept lane-1's value" in result.resolved[0]
+    assert "over lane-2's" in result.resolved[0]
+
+
+def test_session_cookies_fall_back_to_the_later_save():
+    """`expires: -1` is a session cookie: no issue time to compare, so the save time
+    decides, and the report says `session` rather than printing 1969."""
+    root = state([cookie("sid", "old", expires=-1)])
+    result = merge(root, {
+        "lane-1": state([cookie("sid", "a", expires=-1)]),
+        "lane-2": state([cookie("sid", "b", expires=-1)]),
+    }, saved_at={"lane-1": T0, "lane-2": T0 + 1})
+    assert result.state["cookies"][0]["value"] == "b"
+    assert result.resolved == [(
+        f"a.example cookie sid kept lane-2's value (expires session / "
+        f"saved {iso(T0 + 1)}) over lane-1's")]
+
+
+def test_a_dated_cookie_outranks_a_session_cookie():
+    root = state([cookie("sid", "old")])
+    result = merge(root, {
+        "lane-1": state([cookie("sid", "dated", expires=1795000000)]),
+        "lane-2": state([cookie("sid", "session", expires=-1)]),
+    }, saved_at={"lane-1": T0, "lane-2": T0 + 60})
+    assert result.state["cookies"][0]["value"] == "dated"
+
+
+def test_a_full_tie_is_decided_by_lane_name_not_argument_order():
+    root = state([cookie("sid", "old")])
+    lanes = {"lane-2": state([cookie("sid", "two")]),
+             "lane-1": state([cookie("sid", "one")])}
+    result = merge(root, lanes)
+    assert result.state["cookies"][0]["value"] == "one"
+    assert "saved unknown" in result.resolved[0]
+    assert merge(root, dict(reversed(list(lanes.items())))).state == result.state
+
+
+def test_a_rotates_host_still_evicts_on_conflict(tmp_path):
+    """The declared exception. The user has said this site uses reuse detection and
+    wants the re-login forced now, so a conflict drops the host rather than picking."""
+    cfg = config_at(tmp_path, ROTATES)
+    root = state([cookie("sid", "old")],
+                 [origin("https://www.a.example", {"t": "old"})])
+    result = merge(root, {
+        "lane-1": state([cookie("sid", "rotated-by-1")]),
+        "lane-2": state([cookie("sid", "rotated-by-2")]),
+    }, cfg, saved_at={"lane-1": T0, "lane-2": T0 + 5})
     assert result.state["cookies"] == []
     assert result.state["origins"] == []
-    assert "https://www.a.example" in result.evicted_origins
+    assert result.evicted_origins == ["https://www.a.example"]
+    assert result.resolved == []
+    assert "rotates = true" in result.decisions[0].reason
 
 
-def test_eviction_takes_the_whole_origin_not_just_the_conflicting_cookie():
+def test_eviction_takes_the_whole_origin_not_just_the_conflicting_cookie(tmp_path):
     """Half a session is not a session. Leaving the other cookies behind would produce a
     browser that looks signed in and is not, which is harder to diagnose than being out."""
     root = state([cookie("sid", "old"),
@@ -130,18 +222,18 @@ def test_eviction_takes_the_whole_origin_not_just_the_conflicting_cookie():
                          cookie("csrf", "same")]),
         "lane-2": state([cookie("sid", "y"),
                          cookie("csrf", "same")]),
-    })
+    }, config_at(tmp_path, ROTATES))
     assert result.state["cookies"] == []
 
 
-def test_a_conflict_on_one_site_does_not_touch_another():
-    """Eviction is per origin. A blast radius bigger than the conflict would make the
+def test_a_conflict_on_one_site_does_not_touch_another(tmp_path):
+    """Eviction is per host. A blast radius bigger than the conflict would make the
     merge worse than not merging."""
     root = state([cookie("sid", "old"), cookie("sid", "fine", ".b.example")])
     result = merge(root, {
         "lane-1": state([cookie("sid", "x")]),
         "lane-2": state([cookie("sid", "y")]),
-    })
+    }, config_at(tmp_path, ROTATES))
     survivors = {(c["domain"], c["value"]) for c in result.state["cookies"]}
     assert survivors == {(".b.example", "fine")}
 
@@ -167,55 +259,132 @@ def test_a_real_indexeddb_change_does_propagate():
     assert result.state["origins"][0]["indexedDB"] == fresh
 
 
-def test_conflicting_local_storage_also_evicts():
-    """Tokens live in localStorage at least as often as in cookies, so the same rule has
-    to apply there or the protection is half a protection."""
+def test_conflicting_local_storage_resolves_by_save_time():
+    """localStorage has no expiry, so the lane that saved last wins, and says so."""
     root = state(origins=[origin("https://www.a.example", {"token": "old"})])
     result = merge(root, {
         "lane-1": state(origins=[origin("https://www.a.example", {"token": "x"})]),
         "lane-2": state(origins=[origin("https://www.a.example", {"token": "y"})]),
-    })
+    }, saved_at={"lane-1": T0 + 3, "lane-2": T0})
+    assert result.state["origins"][0]["localStorage"] == [{"name": "token",
+                                                           "value": "x"}]
+    assert result.resolved == [(
+        f"www.a.example localStorage[token] kept lane-1's value (saved {iso(T0 + 3)}) "
+        f"over lane-2's")]
+
+
+def test_conflicting_local_storage_on_a_rotates_host_evicts(tmp_path):
+    """Tokens live in localStorage at least as often as in cookies, so the declared
+    exception has to apply there or it is half a protection."""
+    root = state(origins=[origin("https://www.a.example", {"token": "old"})])
+    result = merge(root, {
+        "lane-1": state(origins=[origin("https://www.a.example", {"token": "x"})]),
+        "lane-2": state(origins=[origin("https://www.a.example", {"token": "y"})]),
+    }, config_at(tmp_path, ROTATES))
     assert result.state["origins"] == []
     assert "https://www.a.example" in result.evicted_origins
+
+
+# --- IndexedDB, per database and per store ----------------------------------
+
+
+def db(name, *stores, version=1):
+    return {"name": name, "version": version,
+            "stores": [{"name": s, "records": [{"key": "k", "value": v}]}
+                       for s, v in stores]}
+
+
+def test_two_lanes_changing_two_databases_both_survive():
+    """One blob per origin made these two a conflict, though neither lane touched the
+    other's database. Compared per database, both changes land and nothing is resolved."""
+    root = state(origins=[origin("https://www.a.example", {},
+                                 idb=[db("auth", ("tokens", "0")),
+                                      db("cache", ("pages", "0"))])])
+    result = merge(root, {
+        "lane-1": state(origins=[origin("https://www.a.example", {},
+                                        idb=[db("auth", ("tokens", "1")),
+                                             db("cache", ("pages", "0"))])]),
+        "lane-2": state(origins=[origin("https://www.a.example", {},
+                                        idb=[db("auth", ("tokens", "0")),
+                                             db("cache", ("pages", "2"))])]),
+    })
+    assert result.state["origins"][0]["indexedDB"] == [db("auth", ("tokens", "1")),
+                                                       db("cache", ("pages", "2"))]
+    assert result.resolved == []
+    assert result.decisions[0].changed_by == ["lane-1", "lane-2"]
+
+
+def test_one_store_changed_by_two_lanes_resolves_by_save_time():
+    root = state(origins=[origin("https://www.a.example", {},
+                                 idb=[db("auth", ("tokens", "0"), ("prefs", "0"))])])
+    result = merge(root, {
+        "lane-1": state(origins=[origin("https://www.a.example", {},
+                                        idb=[db("auth", ("tokens", "1"),
+                                                ("prefs", "0"))])]),
+        "lane-2": state(origins=[origin("https://www.a.example", {},
+                                        idb=[db("auth", ("tokens", "2"),
+                                                ("prefs", "0"))])]),
+    }, saved_at={"lane-1": T0, "lane-2": T0 + 7})
+    assert result.state["origins"][0]["indexedDB"] == [
+        db("auth", ("tokens", "2"), ("prefs", "0"))]
+    assert result.resolved == [(
+        f"www.a.example indexedDB[auth/tokens] kept lane-2's value "
+        f"(saved {iso(T0 + 7)}) over lane-1's")]
+
+
+def test_a_store_a_lane_did_not_export_is_not_deleted():
+    """Never propagate a deletion, one level down: a lane whose export lacks a store says
+    nothing about it."""
+    root = state(origins=[origin("https://www.a.example", {},
+                                 idb=[db("auth", ("tokens", "0"), ("prefs", "0"))])])
+    result = merge(root, {"lane-1": state(origins=[origin(
+        "https://www.a.example", {}, idb=[db("auth", ("tokens", "1"))])])})
+    assert result.state["origins"][0]["indexedDB"] == [
+        db("auth", ("tokens", "1"), ("prefs", "0"))]
 
 
 # --- config-driven behaviour ----------------------------------------------
 
 
-def test_a_sticky_origin_is_not_evicted(tmp_path):
+def test_sticky_wins_over_rotates(tmp_path):
     """Some apps keep cryptographic keys client-side, where eviction does not log you out
-    but unpairs the device. The operator gets to say that is worse than the risk."""
-    cfg = config_at(tmp_path, '[origins."a.example"]\nsticky = true\n')
+    but unpairs the device. The operator gets to say that is worse than the risk, and
+    sticky only matters on a rotates host now, since nothing else is ever evicted."""
+    cfg = config_at(tmp_path, '[origins."a.example"]\nsticky = true\nrotates = true\n')
     root = state([cookie("sid", "old")],
                  [origin("https://www.a.example", {"t": "old"})])
     result = merge(root, {
         "lane-1": state([cookie("sid", "x")]),
         "lane-2": state([cookie("sid", "y")]),
+    }, cfg, saved_at={"lane-1": T0, "lane-2": T0 + 1})
+    assert result.evicted_origins == []
+    assert [c["value"] for c in result.state["cookies"]] == ["y"]
+    assert len(result.resolved) == 1
+
+
+def test_a_rotating_site_two_lanes_agree_on_is_merged_without_a_warning(tmp_path):
+    """The old "touched by N lanes" warning fired on every multi-lane run, because an
+    isolated lane exports every cookie root gave it. No conflict, nothing to say."""
+    cfg = config_at(tmp_path, ROTATES)
+    root = state([cookie("sid", "old")], [origin("https://www.a.example")])
+    result = merge(root, {
+        "lane-1": state([cookie("sid", "old")],
+                        [origin("https://www.a.example", {"k": "1"})]),
+        "lane-2": state([cookie("sid", "old")],
+                        [origin("https://www.a.example", {"k": "1"})]),
     }, cfg)
     assert result.evicted_origins == []
-    assert result.state["cookies"], "a sticky origin kept nothing"
-
-
-def test_a_rotating_site_touched_by_two_lanes_is_reported(tmp_path):
-    """Not fatal, but it must never pass silently: this is the arrangement that gets a
-    token family revoked, and the operator asked to be told by marking it."""
-    cfg = config_at(tmp_path, '[origins."a.example"]\nrotates = true\n')
-    root = state(origins=[origin("https://www.a.example")])
-    result = merge(root, {
-        "lane-1": state(origins=[origin("https://www.a.example", {"k": "1"})]),
-        "lane-2": state(origins=[origin("https://www.a.example", {"k": "1"})]),
-    }, cfg)
-    assert result.rotating_violations
-    assert "a.example" in result.rotating_violations[0]
-    assert "lane-1" in result.rotating_violations[0]
+    assert result.resolved == []
+    assert not hasattr(result, "rotating_violations")
 
 
 def test_one_lane_on_a_rotating_site_is_fine(tmp_path):
-    cfg = config_at(tmp_path, '[origins."a.example"]\nrotates = true\n')
+    cfg = config_at(tmp_path, ROTATES)
     root = state(origins=[origin("https://www.a.example")])
     result = merge(root, {"lane-1": state(origins=[origin("https://www.a.example",
                                                            {"k": "1"})])}, cfg)
-    assert result.rotating_violations == []
+    assert result.evicted_origins == []
+    assert result.state["origins"][0]["localStorage"] == [{"name": "k", "value": "1"}]
 
 
 # --- caps refuse rather than truncate --------------------------------------
@@ -295,3 +464,56 @@ def test_a_lane_file_is_named_in_the_decisions(tmp_path):
                                                       {"k": "1"})])), encoding="utf-8")
     result = merge_files(root_path, [lane])
     assert any("lane-7" in d.changed_by for d in result.decisions)
+
+
+def test_merge_files_ranks_lanes_by_when_their_file_was_saved(tmp_path):
+    """The save time comes from the lane file's mtime, so the pure function gets it as
+    an argument and the file loader is what reads it."""
+    root_path = tmp_path / "root.json"
+    root_path.write_text(json.dumps(state([cookie("sid", "old")])), encoding="utf-8")
+    early, late = tmp_path / "lane-1.json", tmp_path / "lane-2.json"
+    late.write_text(json.dumps(state([cookie("sid", "late")])), encoding="utf-8")
+    early.write_text(json.dumps(state([cookie("sid", "early")])), encoding="utf-8")
+    os.utime(early, (T0, T0))
+    os.utime(late, (T0 + 30, T0 + 30))
+    result = merge_files(root_path, [early, late])
+    assert result.state["cookies"][0]["value"] == "late"
+    assert f"saved {iso(T0 + 30)}" in result.resolved[0]
+
+
+def test_the_cli_prints_every_resolved_line(tmp_path, capsys):
+    (tmp_path / "autoweb.toml").write_text("", encoding="utf-8")
+    (tmp_path / "root.json").write_text(json.dumps(state(
+        [cookie("sid", "old")], [origin("https://www.a.example", {"t": "0"})])),
+        encoding="utf-8")
+    paths = []
+    for n in (1, 2):
+        lane = tmp_path / f"lane-{n}.json"
+        lane.write_text(json.dumps(state(
+            [cookie("sid", f"v{n}")], [origin("https://www.a.example", {"t": str(n)})])),
+            encoding="utf-8")
+        os.utime(lane, (T0 + n, T0 + n))
+        paths.append(str(lane))
+    assert cli.main(["-C", str(tmp_path), "merge", "--dry-run", *paths]) == 0
+    out = capsys.readouterr().out
+    assert (f"  resolved: a.example cookie sid kept lane-2's value "
+            f"(expires {iso(1759000000)} / saved {iso(T0 + 2)}) over lane-1's") in out
+    assert (f"  resolved: www.a.example localStorage[t] kept lane-2's value "
+            f"(saved {iso(T0 + 2)}) over lane-1's") in out
+    assert "need a fresh login" not in out
+
+
+def test_the_cli_still_lists_a_rotates_eviction_as_needing_a_login(tmp_path, capsys):
+    (tmp_path / "autoweb.toml").write_text(ROTATES, encoding="utf-8")
+    (tmp_path / "root.json").write_text(json.dumps(state(
+        [cookie("sid", "old")], [origin("https://www.a.example")])), encoding="utf-8")
+    paths = []
+    for n in (1, 2):
+        lane = tmp_path / f"lane-{n}.json"
+        lane.write_text(json.dumps(state([cookie("sid", f"v{n}")])), encoding="utf-8")
+        paths.append(str(lane))
+    assert cli.main(["-C", str(tmp_path), "merge", "--dry-run", *paths]) == 0
+    captured = capsys.readouterr()
+    assert "these need a fresh login:\n    https://www.a.example" in captured.out
+    assert "resolved:" not in captured.out
+    assert "warning:" not in captured.out + captured.err

@@ -25,6 +25,7 @@ What ships, once:
 | skills | `skills/*/SKILL.md` | `autoweb` (model-invoked), `parallel-lanes`, `aw-setup`, `aw-doctor`, `aw-run` |
 | command | `commands/setup-playwright.md` | the Playwright MCP smoke test, unchanged |
 | goal template | `goals/README.md` | the goal file format; no real goals ship |
+| the loop plugin | `plugins/autoweb-loop/` | a second plugin, installed on its own: `/autoweb-loop:aw-loop` and a Stop hook (§9) |
 
 The plugin ships no MCP server. Claude Code loads a plugin-root `.mcp.json` in every
 session on the machine, AutoWeb project or not, so `--init-project` writes the server
@@ -41,7 +42,8 @@ browser server), `.claude/settings.local.json` (the `mcp__laneN` grants and
 ## 2. Names
 
 - Plugin `autoweb`; marketplace `autoweb`; this repository is the marketplace
-  (`.claude-plugin/marketplace.json`, one entry, `source: "./"`).
+  (`.claude-plugin/marketplace.json`, two entries: `autoweb` at `./` and
+  `autoweb-loop` at `./plugins/autoweb-loop`, see §9).
 - Skills are invoked as `/autoweb:<skill>`; the command as `/autoweb:setup-playwright`.
 - Version lives in two places and must match: `pyproject.toml` and
   `.claude-plugin/plugin.json`. 0.2.0 is the first plugin release. A test
@@ -65,6 +67,7 @@ skills/aw-doctor/SKILL.md             user-invoked
 skills/aw-run/SKILL.md                user-invoked
 commands/setup-playwright.md          moved from .claude/commands
 goals/README.md
+plugins/autoweb-loop/                 the second plugin, its own plugin.json, hooks, scripts, skill, tests (§9)
 tests/test_plugin_*.py
 .github/workflows/ci.yml
 AGENTS.md
@@ -345,3 +348,23 @@ run is judged by `autoweb goal check`, not by the model reading lane reports.
   `element` passes and fails, a DNS failure reported as `ERROR`, a 404 as `FAIL`, a
   command killed at a 2 s timeout, and a `data:` page that redirects from script after
   1.5 s judged at the page it redirected to.
+
+## 9. The loop plugin
+
+`plugins/autoweb-loop/` is a second plugin in this marketplace (`source:
+"./plugins/autoweb-loop"`), installed on its own as `autoweb-loop@autoweb`. Its contract
+is `plugins/autoweb-loop/docs/DESIGN.md`. `autoweb` never names it and still ships no
+Stop hook. Read on Claude Code 2.1.299, 2026-11-01:
+
+- It reads `runs/<run-id>/status.json` as §8 defines it (`done`; each `id`, `status`,
+  `detail`), so a change to that file bumps `schema`.
+- Its one hook is `Stop`, in every session and folder. With no `.autoweb/active-loop.json`
+  from the session's folder up to the project root, it exits 0: no output, no write, no log.
+- `aw-run` sets `disable-model-invocation: true`, so the Skill tool will not start it.
+  `aw_loop.py --start` reads `plugins/installed_plugins.json` under the Claude config
+  directory instead, takes the `installPath` of an `autoweb@<marketplace>` install, and
+  the loop follows that install's `skills/aw-run/SKILL.md` by reading it. The docs name
+  the file and its `scope`, `installPath` and `version` fields but not its layout; the
+  `{"version": 2, "plugins": {"<id>": [...]}}` shape was read from disk.
+- The root plugin's copy also holds `plugins/autoweb-loop/`, inert: components load only
+  from the root's own directories, and no way to exclude files from a plugin is documented.

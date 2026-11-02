@@ -12,6 +12,12 @@
       "description": "A browser automation harness for Claude Code: one identity, config, lanes, goals and runs per project, and nothing shared between projects.",
       "source": "./",
       "category": "productivity"
+    },
+    {
+      "name": "autoweb-loop",
+      "description": "Keeps a Claude Code session working on an AutoWeb goal until every assertion passes or an iteration cap is hit. Requires the autoweb plugin. Experimental: not yet proven in a live session.",
+      "source": "./plugins/autoweb-loop",
+      "category": "productivity"
     }
   ]
 }

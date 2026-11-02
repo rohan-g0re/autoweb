@@ -52,7 +52,9 @@ line-length = 100
 target-version = "py311"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# The second path is the autoweb-loop plugin's suite. Its test modules are named so that
+# none shares a basename with one in tests/, which the default import mode refuses.
+testpaths = ["tests", "plugins/autoweb-loop/tests"]
 
 [dependency-groups]
 # `uv sync` installs groups by default and extras only when asked. With the dev tools in

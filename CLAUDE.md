@@ -148,9 +148,19 @@ which a green suite and three dry runs did not:
   (top-level site, has-cross-site-ancestor), and the bit was kept for one of Playwright's
   two encodings and dropped for the other.
 
-What line 6 does **not** cover: a site whose auth lives in IndexedDB or behind MFA, and a
-lane that writes rather than reads. Everything proven is proven for one cookie-session
-site.
+The fix for the first defect was an allowlist of bot-management names, and it has since
+been replaced. A conflict now keeps the most recently issued value - later cookie expiry,
+then later lane-file save - and prints a `resolved:` line for each pick. Eviction remains
+only for a host marked `rotates = true`. The reason is in the `autoweb/merge.py`
+docstring: a value cannot tell a rotated credential from a browser-minted one, and the
+allowlist failed open into a sign-out on every per-browser name it lacked. IndexedDB is
+now compared per database and per object store. The recency rule is offline-tested
+only. The real merge above ran under the allowlist, and no real four-lane merge has
+been run under the new rule yet.
+
+What line 6 does **not** cover: a site whose auth lives in IndexedDB or behind MFA, a
+lane that writes rather than reads, and a real merge under the recency rule. Everything
+proven is proven for one cookie-session site.
 
 The suite is entirely offline. It covers config parsing, state file accounting, lane
 file generation, merge arithmetic, trace judgement and the CLI's exit codes; none of it
@@ -178,11 +188,12 @@ two copies of a contract means one of them is wrong and nobody knows which.
 
 ```
 .claude-plugin/    plugin.json, marketplace.json
-hooks/             hooks.json — SessionStart only. No Stop hook, no loop.
+hooks/             hooks.json — SessionStart only. No Stop hook, no loop in this plugin.
 scripts/           py.sh, aw_common.py, session_start.py, aw.py, aw_setup.py
 skills/            autoweb, parallel-lanes, aw-setup, aw-doctor, aw-run
 commands/          setup-playwright.md
 goals/README.md    the goal file format; no real goals ship
+plugins/autoweb-loop/  the second plugin of this marketplace: a Stop hook loop, installed separately
 ```
 
 `skills/parallel-lanes` moved out of `.claude/skills/`, and

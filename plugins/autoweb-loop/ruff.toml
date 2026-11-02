@@ -1,0 +1,9 @@
+# Inherits line length and target version from the repository's pyproject.toml.
+extend = "../../pyproject.toml"
+
+[lint]
+# Named, not left to the default: the default set grows between ruff releases, and a
+# hook that must catch every exception and stay silent is exactly what the newer
+# blind-except and try-except-pass rules flag. This is the selection the plugin was
+# written and checked against before it moved into this repository.
+select = ["E", "F", "W", "I", "UP", "B"]

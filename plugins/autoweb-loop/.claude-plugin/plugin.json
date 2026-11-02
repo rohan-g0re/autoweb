@@ -1,0 +1,19 @@
+{
+  "name": "autoweb-loop",
+  "version": "0.1.0",
+  "description": "Keeps a Claude Code session working on an AutoWeb goal until every assertion passes or an iteration cap is hit. Requires the autoweb plugin.",
+  "author": {
+    "name": "rohan-g0re"
+  },
+  "homepage": "https://github.com/rohan-g0re/autoweb/tree/main/plugins/autoweb-loop",
+  "repository": "https://github.com/rohan-g0re/autoweb",
+  "license": "Apache-2.0",
+  "keywords": [
+    "autoweb",
+    "browser-automation",
+    "stop-hook",
+    "loop",
+    "assertions",
+    "agents"
+  ]
+}

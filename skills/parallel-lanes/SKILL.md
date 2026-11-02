@@ -145,8 +145,8 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py"
 ```
 
 A `REFUSED:` line or a non-zero exit means the real merge would lose part of the
-identity: keep the output, skip the write, and report it. Otherwise read its `evicted`
-lines, and only then write:
+identity: keep the output, skip the write, and report it. Otherwise read its `resolved`
+and `evicted` lines, and only then write:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" merge lane-1.json lane-3.json
@@ -157,16 +157,18 @@ Report every origin it lists as needing a fresh login. One writer, after every l
 dead. Two merges racing on `root.json` is how you get a file that is valid JSON and
 nobody's session.
 
-Read the dry run rather than skipping to the write. It prints a line per origin, and the
-line you are looking for is `evicted`: that means two lanes changed the same value to
-different things, so one of them is holding a token the server has already rotated away.
-The merge drops that origin rather than guessing, and you will have to log in to it again.
-That is the cheap outcome. Writing the wrong token back can present a retired credential,
-and a server that treats that as a replay attack is entitled to revoke the whole family,
-signing you out everywhere including the identity the lanes came from.
+Read the dry run rather than skipping to the write. A `resolved:` line means two lanes
+changed the same value to different things, and the merge kept the one issued most
+recently: the later cookie expiry, then the lane file saved last. The line names the
+host, the value, the lane kept and the lanes passed over. Most are bot-management values
+every browser mints for itself, and they are expected on any run with more than one
+lane. Report the ones on a value that looks like a login token; if that token turns out
+dead, the next run's goal check fails and says so.
 
-A `warning:` about a rotating site touched by more than one lane means the decomposition
-was wrong, not the merge. Fix it by giving that site one lane next time.
+An `evicted` line only appears for a site marked `rotates = true` in `autoweb.toml`,
+where two lanes disagreed. The merge drops that site's cookies and storage together and
+lists it under "these need a fresh login". Log in to it again before the next run. It
+also means the decomposition was wrong: a rotating site belongs to one lane.
 
 ### What the merge will not do
 

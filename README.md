@@ -24,6 +24,8 @@ per machine, one folder per app you automate, nothing shared between those folde
 
 ## Install
 
+One marketplace, two plugins. `autoweb` is the harness; `autoweb-loop` is optional.
+
 In Claude Code. The first two lines run once ever; the third once per machine:
 
 ```
@@ -39,6 +41,21 @@ step, `--init-project`.
 
 **Restart the session afterwards.** Hooks, agent files and `.mcp.json` are read at
 session start only. Forking instead: clone the repo, `uv sync`, same package and CLI.
+
+**Optional: `autoweb-loop`.** Same marketplace, separate install:
+
+```
+/plugin install autoweb-loop@autoweb
+```
+
+It adds `/autoweb-loop:aw-loop <goal>` and a Stop hook. After each pass of `aw-run`, the
+hook reads `runs/<run>/status.json`; while an assertion fails it sends Claude back to
+work, until every assertion passes or an iteration cap (default 5) is hit. `autoweb`
+itself stays one pass per goal, so install this only if you want the re-running done for
+you. The hook runs on every Stop in every project and exits at once, silently, unless a
+loop is active there. Experimental: an offline suite covers it, but it is not yet proven
+in a live session. Its guide is
+[plugins/autoweb-loop/README.md](plugins/autoweb-loop/README.md).
 
 ## Your first project
 
@@ -95,7 +112,7 @@ A goal is an end state **plus the assertion that proves it was reached** — a U
 visible text, an element state. Deterministic; no LLM judge. If you cannot state the
 assertion up front, the goal is not specified yet. `goals/README.md` is the format, and
 no real goals ship. One run per invocation: there is no retry loop, by decision — the
-assertions decide, and re-running is your call.
+assertions decide, and re-running is your call, or the optional `autoweb-loop` plugin's.
 
 ## One project per app
 
@@ -164,7 +181,8 @@ Pre-alpha. `northstar.md` is the ordered task list: lines 1 to 5 are proven, lin
 point at — every serious defect in this repo's history survived a green test suite.
 
 Deliberately absent: model routing, parallel simulations, a GUI, a scheduler, a results
-server, retry and healing layers, and a loop. The plugin contract is
+server, retry and healing layers, and a loop inside `autoweb` (the separate,
+experimental `autoweb-loop` plugin is one). The plugin contract is
 `docs/PLUGIN-DESIGN.md`, the design rules `CLAUDE.md`, the tour `docs/HANDOFF.md`, the
 measured browser facts `docs/CONSTRAINTS.md`, the releases `CHANGELOG.md`.
 

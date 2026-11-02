@@ -8,6 +8,12 @@ They are kept in their own file so that nobody tidying up the main suite deletes
 looking redundant. None of them is redundant. Each describes a path by which a real
 person's logged-in sessions were destroyed or, worse, a retired OAuth refresh token was
 written back where presenting it could revoke the whole family.
+
+The rule they were written against changed: a conflict no longer evicts a host unless
+its config says `rotates = true`, and otherwise keeps the most recently issued value.
+Tests whose defect lives in the eviction path now set `rotates`, so the path they guard
+is still exercised. The real-world inputs - `__cf_bm`, `PXdOjV695v_px-ff`, the partition
+keys - are kept as inputs, so this file still proves the historical bugs stay fixed.
 """
 
 from __future__ import annotations
@@ -42,12 +48,23 @@ def config_at(tmp_path, body=""):
     return Config.load(tmp_path)
 
 
+def rotates(tmp_path, host="a.example"):
+    return config_at(tmp_path, f'[origins."{host}"]\nrotates = true\n')
+
+
+T0 = 1790000000.0
+
+
 # --- the three criticals ----------------------------------------------------
 
 
-def test_two_lanes_with_different_indexeddb_evicts_rather_than_last_writer_wins():
+def test_two_lanes_with_different_indexeddb_are_not_a_silent_last_writer_wins():
     """IndexedDB had no conflict detection at all, so the last contributor silently won,
-    in the one store where OAuth refresh tokens actually live."""
+    in the one store where OAuth refresh tokens actually live.
+
+    Now each store is its own unit: lane 1's store A and lane 2's store B both land, and
+    the one thing they really disagree on, the database version, is picked by save time
+    and reported. Nothing is decided without a line saying so."""
     root = state(origins=[origin("https://www.a.example", {},
                                  idb=[{"name": "fb", "version": 1, "stores": []}])])
     result = merge(root, {
@@ -57,9 +74,29 @@ def test_two_lanes_with_different_indexeddb_evicts_rather_than_last_writer_wins(
         "lane-2": state(origins=[origin("https://www.a.example", {},
                                         idb=[{"name": "fb", "version": 3,
                                               "stores": [{"name": "B"}]}])]),
-    })
+    }, saved_at={"lane-1": T0, "lane-2": T0 + 1})
+    assert result.state["origins"][0]["indexedDB"] == [
+        {"name": "fb", "version": 3, "stores": [{"name": "A"}, {"name": "B"}]}]
+    assert len(result.resolved) == 1
+    assert result.resolved[0].startswith(
+        "www.a.example indexedDB[fb] kept lane-2's value")
+
+
+def test_a_rotates_host_still_evicts_on_an_indexeddb_conflict(tmp_path):
+    """Refresh tokens live here, so the declared exception has to reach IndexedDB."""
+    root = state(origins=[origin("https://www.a.example", {},
+                                 idb=[{"name": "fb", "version": 1,
+                                       "stores": [{"name": "tokens", "v": 0}]}])])
+    result = merge(root, {
+        f"lane-{n}": state(origins=[origin("https://www.a.example", {},
+                                           idb=[{"name": "fb", "version": 1,
+                                                 "stores": [{"name": "tokens",
+                                                             "v": n}]}])])
+        for n in (1, 2)
+    }, rotates(tmp_path))
     assert result.state["origins"] == []
-    assert "https://www.a.example" in result.evicted_origins
+    reason = next(d.reason for d in result.decisions if d.action == "evicted")
+    assert "indexedDB[fb/tokens]" in reason
 
 
 def test_an_unchanged_lane_cannot_revert_a_lane_that_refreshed_indexeddb():
@@ -71,23 +108,31 @@ def test_an_unchanged_lane_cannot_revert_a_lane_that_refreshed_indexeddb():
     rotated away, and names the innocent lane as the one that changed it. The outcome also
     flipped with the order of the filenames on the command line.
     """
-    stale = [{"name": "fb", "version": 1, "stores": [{"name": "old"}]}]
-    fresh = [{"name": "fb", "version": 2, "stores": [{"name": "new"}]}]
+    stale = [{"name": "fb", "version": 1,
+              "stores": [{"name": "tokens", "records": [{"key": "rt", "value": "old"}]}]}]
+    fresh = [{"name": "fb", "version": 2,
+              "stores": [{"name": "tokens", "records": [{"key": "rt", "value": "new"}]}]}]
     root = state(origins=[origin("https://www.a.example", {}, idb=stale)])
     lanes = {
         "lane-1": state(origins=[origin("https://www.a.example", {}, idb=fresh)]),
         "lane-2": state(origins=[origin("https://www.a.example", {}, idb=stale)]),
     }
-    result = merge(root, lanes)
+    # lane-2 saved later. Recency must still not let it win: it changed nothing, so it
+    # is not a candidate at all, which is what comparing against the ancestor buys.
+    result = merge(root, lanes, saved_at={"lane-1": T0, "lane-2": T0 + 60})
     assert result.state["origins"][0]["indexedDB"] == fresh, "the stale lane won"
+    assert result.resolved == []
+    assert result.decisions[0].changed_by == ["lane-1"]
     # And the answer must be a function of the inputs, not of their order.
-    assert merge(root, dict(reversed(list(lanes.items())))).state == result.state
+    assert merge(root, dict(reversed(list(lanes.items()))),
+                 saved_at={"lane-1": T0, "lane-2": T0 + 60}).state == result.state
 
 
-def test_a_local_storage_conflict_evicts_that_hosts_cookies_too():
+def test_a_local_storage_conflict_evicts_that_hosts_cookies_too(tmp_path):
     """Conflicts were detected in two passes with eviction in between, so a localStorage
     conflict found in the second pass had nothing left to act on. The site's cookie jar
-    survived a decision that the site was unsafe to keep."""
+    survived a decision that the site was unsafe to keep. Eviction is now only for a
+    `rotates` host, and there the order of operations still decides it."""
     root = state([cookie("li_at", "V1")],
                  [origin("https://www.a.example", {"token": "T0"})])
     result = merge(root, {
@@ -95,12 +140,12 @@ def test_a_local_storage_conflict_evicts_that_hosts_cookies_too():
                         [origin("https://www.a.example", {"token": "T1"})]),
         "lane-2": state([cookie("li_at", "V1")],
                         [origin("https://www.a.example", {"token": "T2"})]),
-    })
+    }, rotates(tmp_path))
     assert result.state["origins"] == []
     assert result.state["cookies"] == [], "the cookie jar outlived its own origin"
 
 
-def test_a_domain_scoped_cookie_conflict_evicts_the_hosts_origins():
+def test_a_domain_scoped_cookie_conflict_evicts_the_hosts_origins(tmp_path):
     """The one that would have fired on the first real run.
 
     Cookies are domain-scoped (`.linkedin.com`) and origins are host-specific
@@ -115,7 +160,7 @@ def test_a_domain_scoped_cookie_conflict_evicts_the_hosts_origins():
     result = merge(root, {
         "lane-1": state([cookie("sid", "x", ".a.example")]),
         "lane-2": state([cookie("sid", "y", ".a.example")]),
-    })
+    }, rotates(tmp_path))
     assert result.state["cookies"] == []
     assert result.state["origins"] == [], "origins outlived their own cookie jar"
     assert len(result.evicted_origins) == 2
@@ -138,37 +183,40 @@ def test_an_unchanged_cookie_still_gets_its_expiry_refreshed():
 def test_sticky_protects_a_host_that_exists_only_in_lane_cookies(tmp_path):
     """The hosts to consult config about were gathered from root's cookies and both sides'
     origins, but not from lane cookies, so a host first seen in a lane never reached
-    `rule_for` and `sticky` could not protect it."""
-    cfg = config_at(tmp_path, '[origins."auth.example"]\nsticky = true\n')
+    `rule_for` and `sticky` could not protect it. Sticky only matters on a `rotates` host
+    now, so the rule carries both."""
+    cfg = config_at(tmp_path,
+                    '[origins."auth.example"]\nsticky = true\nrotates = true\n')
     result = merge(state(), {
         "lane-1": state([cookie("sid", "A", "auth.example")]),
         "lane-2": state([cookie("sid", "B", "auth.example")]),
     }, cfg)
     assert result.state["cookies"], "sticky did not protect a lane-only host"
     assert result.evicted_origins == []
+    assert len(result.resolved) == 1
 
 
-def test_a_rotating_cookie_only_site_is_still_reported(tmp_path):
+def test_a_rotating_cookie_only_site_still_reaches_its_rule(tmp_path):
     """The rotating-site check counted lane origins only. A session living purely in
     cookies has no entry in `origins` at all, and that is exactly the kind of site whose
-    token family gets revoked."""
-    cfg = config_at(tmp_path, '[origins."a.example"]\nrotates = true\n')
+    token family gets revoked. The same lane-only host must reach `rule_for` for eviction
+    as it once had to for the warning this replaced."""
     result = merge(state(), {
-        "lane-1": state([cookie("sid", "A")]),
-        "lane-2": state([cookie("sid", "A")]),
-    }, cfg)
-    assert result.rotating_violations
-    assert "a.example" in result.rotating_violations[0]
+        "lane-1": state([cookie("sid", "A", "auth.example")]),
+        "lane-2": state([cookie("sid", "B", "auth.example")]),
+    }, rotates(tmp_path, "auth.example"))
+    assert result.state["cookies"] == []
+    assert result.evicted_origins == ["auth.example"]
 
 
-def test_a_cookie_only_conflict_appears_in_the_report():
+def test_a_cookie_only_conflict_appears_in_the_report(tmp_path):
     """A conflicted host with no stored origin produced no decision at all, so cookies
     vanished and the per-origin report showed nothing. The audit trail is the only human
     check standing between this and a real identity."""
     result = merge(state([cookie("sid", "old", "cookies-only.example")]), {
         "lane-1": state([cookie("sid", "x", "cookies-only.example")]),
         "lane-2": state([cookie("sid", "y", "cookies-only.example")]),
-    })
+    }, rotates(tmp_path, "cookies-only.example"))
     assert result.state["cookies"] == []
     evicted = [d for d in result.decisions if d.action == "evicted"]
     assert evicted, "cookies were dropped with nothing in the report to say so"
@@ -232,7 +280,7 @@ def test_a_cap_violation_blocks_the_write_but_not_the_report(tmp_path):
     assert not (tmp_path / "root.json").exists()
 
 
-def test_an_ipv6_origin_does_not_collapse_onto_every_other_one():
+def test_an_ipv6_origin_does_not_collapse_onto_every_other_one(tmp_path):
     """merge had its own host normaliser that returned "[" for any IPv6 literal, so a
     conflict on one IPv6 origin evicted them all. It now uses the one in config."""
     root = state(origins=[origin("http://[::1]:3000", {"t": "0"}),
@@ -240,109 +288,157 @@ def test_an_ipv6_origin_does_not_collapse_onto_every_other_one():
     result = merge(root, {
         "lane-1": state(origins=[origin("http://[::1]:3000", {"t": "x"})]),
         "lane-2": state(origins=[origin("http://[::1]:3000", {"t": "y"})]),
-    })
+    }, rotates(tmp_path, "[::1]"))
     survivors = [o["origin"] for o in result.state["origins"]]
     assert survivors == ["http://[::2]:3000"]
 
 
 # --- the defect the first real four-lane run found --------------------------
-# These four cookies were measured conflicting across four concurrent browsers reading
-# LinkedIn and Google with no login action at all, on 2026-10-03. `li_at` and
-# `JSESSIONID` were byte-identical in all four, so nothing had rotated - and the merge
-# proposed evicting every origin, down to "0 origins". Writing it would have signed
-# root.json out of LinkedIn as the direct result of a read-only run.
+# These values were measured conflicting across four concurrent browsers reading LinkedIn
+# and Google with no login action at all, on 2026-10-03. `li_at` and `JSESSIONID` were
+# byte-identical in all four, so nothing had rotated - and the merge proposed evicting
+# every origin, down to "0 origins". Writing it would have signed root.json out of
+# LinkedIn as the direct result of a read-only run.
+#
+# The first fix was an allowlist of bot-management names that kept root's copy. It is
+# gone: an allowlist fails open into a sign-out on every per-browser name it lacks. The
+# same inputs now merge by recency, with zero evictions and one `resolved` line each.
 
-def test_bot_management_cookies_do_not_evict_a_logged_in_site():
-    """The reported case, reduced: four lanes, four different `__cf_bm` values, an
-    untouched session cookie, and a stored origin that must survive."""
+LINKEDIN = ".linkedin.com"
+GOOGLE = ".google.com"
+PX_KEY = "PXdOjV695v_px-ff"
+
+
+def measured_run():
+    """The four-lane LinkedIn/Google run, reduced to the values that conflicted plus the
+    session that must survive them. Lane n saved its file n seconds after T0."""
     root = state(
-        cookies=[cookie("li_at", "SESSION", domain=".linkedin.com"),
-                 cookie("__cf_bm", "root-mint", domain=".linkedin.com")],
-        origins=[origin("https://www.linkedin.com", {"voyager": "payload"})],
+        cookies=[cookie("li_at", "SESSION", domain=LINKEDIN),
+                 cookie("JSESSIONID", "ajax:1", domain=LINKEDIN),
+                 cookie("__cf_bm", "root-mint", domain=LINKEDIN),
+                 cookie("_px3", "root-mint", domain=LINKEDIN),
+                 cookie("pxcts", "root-mint", domain=LINKEDIN),
+                 cookie("__Secure-3PSIDCC", "root-mint", domain=GOOGLE)],
+        origins=[origin("https://www.linkedin.com",
+                        {"voyager": "payload", PX_KEY: "root"}),
+                 origin("https://li.protechts.net", {PX_KEY: "root"}),
+                 origin("https://accounts.google.com", {"k": "v"}),
+                 origin("https://www.google.com", {"k": "v"})],
     )
     lanes = {
         f"lane-{n}": state(
-            cookies=[cookie("li_at", "SESSION", domain=".linkedin.com"),
-                     cookie("__cf_bm", f"browser-{n}", domain=".linkedin.com")],
-            origins=[origin("https://www.linkedin.com", {"voyager": "payload"})],
+            cookies=[cookie("li_at", "SESSION", domain=LINKEDIN),
+                     cookie("JSESSIONID", "ajax:1", domain=LINKEDIN),
+                     cookie("__cf_bm", f"browser-{n}", domain=LINKEDIN),
+                     cookie("_px3", f"browser-{n}", domain=LINKEDIN),
+                     cookie("pxcts", f"browser-{n}", domain=LINKEDIN),
+                     cookie("__Secure-3PSIDCC", f"browser-{n}", domain=GOOGLE)],
+            origins=[origin("https://www.linkedin.com",
+                            {"voyager": "payload", PX_KEY: f"browser-{n}"}),
+                     origin("https://li.protechts.net", {PX_KEY: f"browser-{n}"}),
+                     origin("https://accounts.google.com", {"k": "v"}),
+                     origin("https://www.google.com", {"k": "v"})],
         )
         for n in (1, 2, 3, 4)
     }
-    result = merge(root, lanes)
+    return root, lanes, {f"lane-{n}": T0 + n for n in (1, 2, 3, 4)}
+
+
+def test_the_measured_run_merges_with_no_eviction_and_says_what_it_picked():
+    """Six values disagreed: four cookies and the PerimeterX key on two origins. Each is
+    resolved to the last lane saved, and each pick is a line."""
+    root, lanes, saved_at = measured_run()
+    result = merge(root, lanes, saved_at=saved_at)
 
     assert result.evicted_origins == [], "a read-only run must not destroy the login"
-    assert [o["origin"] for o in result.state["origins"]] == ["https://www.linkedin.com"]
+    assert [o["origin"] for o in result.state["origins"]] == [
+        "https://accounts.google.com", "https://li.protechts.net",
+        "https://www.google.com", "https://www.linkedin.com"]
     survivors = {c["name"]: c["value"] for c in result.state["cookies"]}
     assert survivors["li_at"] == "SESSION"
-    # Root's copy, not any lane's: a lane's value is that browser's fingerprint, and
-    # importing it into the shared identity is what these cookies exist to prevent.
-    assert survivors["__cf_bm"] == "root-mint"
-    assert result.volatile_conflicts == {"linkedin.com": ["__cf_bm"]}
+    assert survivors["JSESSIONID"] == "ajax:1"
+    for name in ("__cf_bm", "_px3", "pxcts", "__Secure-3PSIDCC"):
+        assert survivors[name] == "browser-4", name
+    assert len(result.resolved) == 6
+    for line in result.resolved:
+        assert "kept lane-4's value" in line
+        assert line.endswith("over lane-1's, lane-2's, lane-3's")
+    assert sorted(line.split(" kept ")[0] for line in result.resolved) == [
+        "google.com cookie __Secure-3PSIDCC",
+        "li.protechts.net localStorage[PXdOjV695v_px-ff]",
+        "linkedin.com cookie __cf_bm",
+        "linkedin.com cookie _px3",
+        "linkedin.com cookie pxcts",
+        "www.linkedin.com localStorage[PXdOjV695v_px-ff]",
+    ]
+    assert result.cookies_evicted == 0
+    assert result.writable
 
 
-def test_the_other_measured_names_are_covered_whatever_their_case():
-    """`__Secure-3PSIDCC` arrives from Chrome in that spelling; `_px3` and `pxcts` are
-    PerimeterX. All three conflicted on the same run."""
-    for name in ("__Secure-3PSIDCC", "_px3", "pxcts", "__CF_BM"):
-        root = state(cookies=[cookie(name, "root"), cookie("sid", "keep")])
+def test_names_the_allowlist_never_had_merge_the_same_way():
+    """The reason the allowlist went. Google's plain `SIDCC`, GA4's `_ga_<id>` and
+    Datadog's `_dd_s` are per-browser too, were not on it, and would each have evicted a
+    logged-in host. Case never mattered to recency, so `__CF_BM` is here as well."""
+    for name in ("SIDCC", "_ga_ABC123XYZ", "_dd_s", "__CF_BM", "__Secure-3PSIDCC"):
+        root = state(cookies=[cookie(name, "root"), cookie("sid", "keep")],
+                     origins=[origin("https://www.a.example", {"k": "v"})])
         result = merge(root, {
             "lane-1": state(cookies=[cookie(name, "a"), cookie("sid", "keep")]),
             "lane-2": state(cookies=[cookie(name, "b"), cookie("sid", "keep")]),
-        })
+        }, saved_at={"lane-1": T0, "lane-2": T0 + 1})
         assert result.evicted_origins == [], f"{name} must not evict"
-        assert result.volatile_conflicts, f"{name} must still be reported"
+        assert len(result.resolved) == 1, f"{name} must still be reported"
+        values = {c["name"]: c["value"] for c in result.state["cookies"]}
+        assert values == {name: "b", "sid": "keep"}, name
 
 
-def test_a_real_session_cookie_still_evicts():
-    """The safety rule is narrowed, not removed. A conflict on anything not on the list
-    is still treated as a rotated credential, because it may be one."""
-    root = state(cookies=[cookie("li_at", "SESSION", domain=".linkedin.com")],
+def test_a_real_session_cookie_resolves_too_unless_the_host_rotates(tmp_path):
+    """A conflict on `li_at` is what the old rule existed for, and a value alone still
+    cannot say whether it rotated. Without `rotates`, recency; with it, eviction."""
+    root = state(cookies=[cookie("li_at", "SESSION", domain=LINKEDIN)],
                  origins=[origin("https://www.linkedin.com", {"k": "v"})])
-    result = merge(root, {
-        "lane-1": state(cookies=[cookie("li_at", "ROTATED-A", domain=".linkedin.com")]),
-        "lane-2": state(cookies=[cookie("li_at", "ROTATED-B", domain=".linkedin.com")]),
-    })
-    assert result.evicted_origins == ["https://www.linkedin.com"]
-    assert result.state["cookies"] == []
+    lanes = {
+        "lane-1": state(cookies=[cookie("li_at", "ROTATED-A", domain=LINKEDIN,
+                                        expires=1795000000)]),
+        "lane-2": state(cookies=[cookie("li_at", "ROTATED-B", domain=LINKEDIN,
+                                        expires=1794000000)]),
+    }
+    saved_at = {"lane-1": T0, "lane-2": T0 + 1}
+
+    resolved = merge(root, lanes, saved_at=saved_at)
+    assert resolved.evicted_origins == []
+    assert [c["value"] for c in resolved.state["cookies"]] == ["ROTATED-A"]
+
+    evicted = merge(root, lanes, rotates(tmp_path, "linkedin.com"), saved_at)
+    assert evicted.evicted_origins == ["https://www.linkedin.com"]
+    assert evicted.state["cookies"] == []
 
 
-def test_jsessionid_is_not_treated_as_volatile():
-    """Deliberate, and worth a test so nobody adds it for looking per-connection.
-    LinkedIn uses JSESSIONID as its CSRF token, paired with `li_at`."""
-    root = state(cookies=[cookie("JSESSIONID", "ajax:1", domain=".linkedin.com")],
-                 origins=[origin("https://www.linkedin.com", {"k": "v"})])
-    result = merge(root, {
-        "lane-1": state(cookies=[cookie("JSESSIONID", "ajax:2", domain=".linkedin.com")]),
-        "lane-2": state(cookies=[cookie("JSESSIONID", "ajax:3", domain=".linkedin.com")]),
-    })
-    assert result.evicted_origins == ["https://www.linkedin.com"]
-
-
-def test_an_eviction_notice_names_the_value_and_the_lanes():
+def test_an_eviction_notice_names_the_value_and_the_lanes(tmp_path):
     """The first run's dry run said only "two lanes changed the same value", which is
     what made a merge design bug look like token rotation. It must name the cookie.
 
     Also a regression on the lookup: the conflict is recorded against the cookie's host,
     `linkedin.com`, while the decision is reported against the origin's host,
     `www.linkedin.com`. An exact-key lookup found nothing and named no lane at all."""
-    root = state(cookies=[cookie("li_at", "SESSION", domain=".linkedin.com")],
+    root = state(cookies=[cookie("li_at", "SESSION", domain=LINKEDIN)],
                  origins=[origin("https://www.linkedin.com", {"k": "v"})])
     result = merge(root, {
-        "lane-1": state(cookies=[cookie("li_at", "A", domain=".linkedin.com")]),
-        "lane-2": state(cookies=[cookie("li_at", "B", domain=".linkedin.com")]),
-    })
+        "lane-1": state(cookies=[cookie("li_at", "A", domain=LINKEDIN)]),
+        "lane-2": state(cookies=[cookie("li_at", "B", domain=LINKEDIN)]),
+    }, rotates(tmp_path, "linkedin.com"))
     evicted = [d for d in result.decisions if d.action == "evicted"]
     assert len(evicted) == 1
     assert "cookie li_at" in evicted[0].reason
     assert evicted[0].changed_by == ["lane-1", "lane-2"]
 
 
-def test_a_localstorage_eviction_names_the_key():
+def test_a_localstorage_eviction_names_the_key(tmp_path):
     root = state(origins=[origin("https://a.example", {"token": "0"})])
     result = merge(root, {
         "lane-1": state(origins=[origin("https://a.example", {"token": "1"})]),
         "lane-2": state(origins=[origin("https://a.example", {"token": "2"})]),
-    })
+    }, rotates(tmp_path))
     reason = next(d.reason for d in result.decisions if d.action == "evicted")
     assert "localStorage[token]" in reason
 
@@ -367,49 +463,49 @@ def test_an_unchanged_cookie_is_not_counted_as_refreshed():
     assert result.cookies_refreshed == 0
 
 
-def test_a_volatile_cookie_absent_from_root_is_not_invented():
-    """With no ancestor there is no stale-but-neutral copy to keep, and crowning a lane
-    would write one browser's fingerprint into the shared identity."""
+def test_a_cookie_absent_from_root_that_two_lanes_minted_is_added_once():
+    """With the allowlist, a bot-management cookie absent from root was left absent
+    rather than crowning a lane. Recency crowns one and says which, counted as one add."""
     result = merge(state(), {
         "lane-1": state(cookies=[cookie("__cf_bm", "a")]),
         "lane-2": state(cookies=[cookie("__cf_bm", "b")]),
-    })
-    assert result.state["cookies"] == []
-    assert result.cookies_added == 0
+    }, saved_at={"lane-1": T0 + 1, "lane-2": T0})
+    assert [c["value"] for c in result.state["cookies"]] == ["a"]
+    assert result.cookies_added == 1
     assert result.evicted_origins == []
+    assert len(result.resolved) == 1
 
 
 def test_a_perimeterx_storage_key_does_not_evict_the_site_it_sits_on():
     """Measured: with the cookie rule in place, `li.protechts.net` was still evicted over
-    `localStorage[PXdOjV695v_px-ff]`. Exempting the host would have been the easy fix and
-    the wrong one - nobody has an account on protechts.net, and the case that matters is
-    the identical key under an origin somebody is logged in to."""
+    `localStorage[PXdOjV695v_px-ff]`. The case that matters is the identical key under an
+    origin somebody is logged in to, and it must leave that origin's real keys alone."""
     root = state(
-        cookies=[cookie("li_at", "SESSION", domain=".linkedin.com")],
+        cookies=[cookie("li_at", "SESSION", domain=LINKEDIN)],
         origins=[origin("https://www.linkedin.com",
-                        {"PXdOjV695v_px-ff": "root", "voyager:badges": "3"})],
+                        {PX_KEY: "root", "voyager:badges": "3"})],
     )
     result = merge(root, {
-        "lane-1": state(origins=[origin("https://www.linkedin.com",
-                                        {"PXdOjV695v_px-ff": "a"})]),
-        "lane-2": state(origins=[origin("https://www.linkedin.com",
-                                        {"PXdOjV695v_px-ff": "b"})]),
-    })
+        "lane-1": state(origins=[origin("https://www.linkedin.com", {PX_KEY: "a"})]),
+        "lane-2": state(origins=[origin("https://www.linkedin.com", {PX_KEY: "b"})]),
+    }, saved_at={"lane-1": T0, "lane-2": T0 + 1})
     assert result.evicted_origins == []
     survivors = {i["name"]: i["value"]
                  for i in result.state["origins"][0]["localStorage"]}
-    assert survivors["PXdOjV695v_px-ff"] == "root", "root's copy, not a lane's"
+    assert survivors[PX_KEY] == "b", "the lane saved last"
     assert survivors["voyager:badges"] == "3", "the real key must be untouched"
-    assert result.volatile_conflicts == {
-        "www.linkedin.com": ["localStorage[PXdOjV695v_px-ff]"]}
+    assert [c["value"] for c in result.state["cookies"]] == ["SESSION"]
+    assert result.resolved == [(
+        "www.linkedin.com localStorage[PXdOjV695v_px-ff] kept lane-2's value "
+        "(saved 2026-09-21T14:13:21Z) over lane-1's")]
 
 
-def test_a_real_storage_token_still_evicts():
+def test_a_real_storage_token_on_a_rotates_host_still_evicts(tmp_path):
     root = state(origins=[origin("https://a.example", {"refresh_token": "0"})])
     result = merge(root, {
         "lane-1": state(origins=[origin("https://a.example", {"refresh_token": "1"})]),
         "lane-2": state(origins=[origin("https://a.example", {"refresh_token": "2"})]),
-    })
+    }, rotates(tmp_path))
     assert result.evicted_origins == ["https://a.example"]
 
 
@@ -488,14 +584,14 @@ def test_a_merge_that_would_lose_a_cookie_refuses_to_write(tmp_path, monkeypatch
     assert not (tmp_path / "root.json").exists()
 
 
-def test_an_evicted_cookie_is_not_reported_as_lost():
+def test_an_evicted_cookie_is_not_reported_as_lost(tmp_path):
     """Eviction is accounted for, so the invariant must not fire on it."""
     root = state(cookies=[cookie("li_at", "SESSION", domain=".linkedin.com")],
                  origins=[origin("https://www.linkedin.com", {"k": "v"})])
     result = merge(root, {
         "lane-1": state(cookies=[cookie("li_at", "A", domain=".linkedin.com")]),
         "lane-2": state(cookies=[cookie("li_at", "B", domain=".linkedin.com")]),
-    })
+    }, rotates(tmp_path, "linkedin.com"))
     assert result.cookies_evicted == 1
     assert result.lost_cookies == []
     assert result.writable
@@ -589,3 +685,21 @@ def test_a_key_that_arrives_twice_refuses_the_write(tmp_path):
     with pytest.raises(MergeError, match="cannot tell them apart"):
         write_root(tmp_path / "root.json", result)
     assert not (tmp_path / "root.json").exists()
+
+
+def test_two_partitions_of_one_cookie_resolve_separately():
+    """Recency must pick per cookie identity, partition included. Picking per name would
+    put one partition's winner into the other and reopen the CHIPS collapse."""
+    root = state(cookies=[partitioned("t", "old", "https://x.example"),
+                          partitioned("t", "old", "https://y.example")])
+    result = merge(root, {
+        "lane-1": state(cookies=[partitioned("t", "x1", "https://x.example"),
+                                 partitioned("t", "y1", "https://y.example")]),
+        "lane-2": state(cookies=[partitioned("t", "x2", "https://x.example"),
+                                 partitioned("t", "y2", "https://y.example")]),
+    }, saved_at={"lane-1": T0 + 1, "lane-2": T0})
+    by_partition = {c["partitionKey"]: c["value"] for c in result.state["cookies"]}
+    assert by_partition == {"https://x.example": "x1", "https://y.example": "y1"}
+    assert result.cookie_rows == 2 and result.lost_cookies == []
+    assert len(result.resolved) == 2
+    assert "[partition https://x.example|1]" in result.resolved[0]
