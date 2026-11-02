@@ -1,6 +1,6 @@
 ---
 name: aw-run
-description: "Runs one AutoWeb goal end to end: reads the goal file, checks the config and the identity, dispatches the browser lanes, writes the deliverable and the run log under `runs/`, then reports pass or fail for each of the goal's own assertions. Handles 'aw run', 'run the goal', 'run goals/x.md', 'execute this goal', 'do the daily digest goal'."
+description: "Runs one AutoWeb goal end to end: reads the goal file, checks the config and the identity, dispatches the browser lanes, writes the deliverable and the run log under `runs/`, then checks the goal's own assertions with `autoweb goal check` and reports pass or fail for each. Handles 'aw run', 'run the goal', 'run goals/x.md', 'execute this goal', 'do the daily digest goal'."
 disable-model-invocation: true
 ---
 
@@ -11,17 +11,27 @@ the `goals/` prefix: `daily-digest`, `daily-digest.md` and `goals/daily-digest.m
 mean the same file. When no argument was given, list `goals/*.md` apart from `README.md`
 and ask which one.
 
-1. Read the goal file.
+1. Read the goal file, and fix the run id: `<YYYY-MM-DD>-<goal>`, today's date from
+   `date +%F`. The run's directory, `runs/<run id>/`, is named after it.
 
    ```bash
-   ls goals/ && cat "goals/<goal>.md"
+   ls goals/ && cat "goals/<goal>.md" && date +%F
    ```
 
    Hold on to its six sections: `## Target`, `## Resources`, `## The work`,
-   `## Assertion`, `## Constraints` and `## Reporting`. `goals/README.md` is the format,
-   not a goal. Done when the target URLs, the numbered sub-goals and the numbered
-   assertions are all in hand. If the file does not exist, say so, list what `goals/`
-   holds, and stop — do not invent a goal.
+   `## Assertions`, `## Constraints` and `## Reporting`. `goals/README.md` is the format,
+   not a goal. If the file does not exist, say so, list what `goals/` holds, and stop.
+
+   Then confirm the assertions parse, before anything opens a browser:
+
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" goal check "goals/<goal>.md" --run "<run id>" --dry-run
+   ```
+
+   Exit 2 means the goal has no checkable assertion or a malformed one; report its error
+   line and stop, because the run would have nothing to be judged against. Done when the
+   target URLs, the numbered sub-goals and the run id are in hand and the dry run exited
+   0.
 
 2. Validate the config. A non-zero exit here means `autoweb.toml` is wrong, and it names
    the key; stop and report that rather than running anything in a browser.
@@ -113,7 +123,7 @@ and ask which one.
 8. Write the deliverable.
 
    ```bash
-   mkdir -p "runs/$(date +%F)-<goal>"
+   mkdir -p "runs/<run id>"
    ```
 
    The deliverable itself is whatever `## Reporting` in the goal asks for, written into
@@ -122,22 +132,32 @@ and ask which one.
    from step 3; each lane's reported facts with the URL behind each one; every blocked
    sub-goal with its reason; any lane that was re-dispatched and why; and the merge
    output from step 7, or why it did not run. Done when both the deliverable and
-   `run-log.md` exist under `runs/<YYYY-MM-DD>-<goal>/`.
+   `run-log.md` exist under `runs/<run id>/`.
 
-9. Run the goal's own assertions, in the order `## Assertion` numbers them. Each one is
-   deterministic by construction — a URL match, visible text, an element state, a file
-   that must exist, or a shell command that exits 0 — so run the ones that are commands
-   and check the ones that are observations against what the lanes reported with their
-   URLs. Done when every numbered assertion has been evaluated.
+9. Check the goal's assertions. The command evaluates every `[[assert]]` in
+   `## Assertions` (browser checks in a fresh browser seeded from `root.json`, command
+   checks in the project root) and writes `runs/<run id>/status.json`.
 
-10. Report, one line per assertion: its number, what it checked, and PASS or FAIL with
-    the evidence — the exit code, the URL, the file path. Then one line for the run:
-    where the deliverable is, and how many assertions passed out of how many.
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" goal check "goals/<goal>.md" --run "<run id>"
+   ```
 
-    **This is one pass. There is no loop.** Do not retry a failed assertion, re-plan
-    around it, or adjust the goal to make it pass. A failed assertion reported plainly
-    is the output; re-running is the user's call.
+   Its verdict is the run's verdict. Exit 0 means every assertion passed and
+   `status.json` says `done: true`; exit 1 means at least one is `FAIL` or `ERROR`;
+   exit 2 means the goal or an input is missing or malformed, and no `status.json` was
+   written. Append its output, verbatim, to `run-log.md` under a `## Assertions` heading.
+   Done when the command has run once and its output and exit code are in `run-log.md`.
 
-Complete when the goal's assertions have each been reported pass or fail, the deliverable
-and `run-log.md` are under `runs/<YYYY-MM-DD>-<goal>/`, the merge ran once or the report
-says why it did not, and no retry was attempted.
+10. Report, one line per assertion, copied from the command's output: its id, its kind,
+    and `PASS`, `FAIL` or `ERROR` with the detail. Then one line for the run: where the
+    deliverable is, the path of `status.json`, and how many assertions passed out of
+    how many.
+
+    **This is one pass. There is no loop.** A failed assertion reported plainly is the
+    output. Leave the goal as written and the run as it ended; re-running is the user's
+    call.
+
+Complete when `runs/<run id>/status.json` exists with `done: true`, or the report names
+each assertion that failed and why (or, on exit 2, the error that stopped the check); the
+deliverable and `run-log.md` are under `runs/<run id>/`; the merge ran once or the report
+says why it did not; and no retry was attempted.

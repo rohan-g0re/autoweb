@@ -487,3 +487,61 @@ def test_the_hook_runs_inside_two_seconds(ss, autoweb_project, capsys):
     elapsed = time.monotonic() - started
     capsys.readouterr()
     assert elapsed < 2.0
+
+
+# ------------------------------------------------------- shared browser server
+#
+# The plugin ships no MCP server, so a project's session has a `playwright` browser
+# only when the project's own .mcp.json declares one. The status line says so when it
+# does not, and says nothing when it does.
+
+SEGMENT = "shared browser: not set up (run /autoweb:aw-setup)"
+
+
+def write_mcp_json(project, servers):
+    (project / ".mcp.json").write_text(json.dumps({"mcpServers": servers}),
+                                       encoding="utf-8", newline="\n")
+
+
+def test_a_project_without_mcp_json_is_told_to_run_setup(ss, autoweb_project, capsys):
+    ss.run(autoweb_project)
+    status = lines_of(capsys.readouterr())[0]
+    assert status.endswith(" · " + SEGMENT)
+
+
+def test_the_segment_goes_once_the_server_is_declared(ss, autoweb_project, capsys):
+    ss.run(autoweb_project)
+    assert SEGMENT in lines_of(capsys.readouterr())[0]
+    write_mcp_json(autoweb_project,
+                   {"playwright": {"command": "npx", "args": ["@playwright/mcp@0.0.83"]}})
+    ss.run(autoweb_project)
+    lines = lines_of(capsys.readouterr())
+    assert len(lines) == 2
+    assert "shared browser" not in lines[0]
+
+
+@pytest.mark.parametrize("text", ['{"mcpServers": {"other": {"command": "x"}}}',
+                                  "{not json", "[]"],
+                         ids=["other-servers-only", "not-json", "not-an-object"])
+def test_an_mcp_json_without_a_playwright_entry_keeps_the_segment(ss, autoweb_project,
+                                                                  capsys, text):
+    (autoweb_project / ".mcp.json").write_text(text, encoding="utf-8")
+    assert ss.run(autoweb_project) == 0
+    assert SEGMENT in lines_of(capsys.readouterr())[0]
+
+
+def test_a_plain_directory_with_no_server_still_gets_nothing(ss, project, capsys):
+    assert ss.run(project) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_the_segment_is_ascii_and_the_block_stays_in_budget(ss, autoweb_project, capsys):
+    assert ss.mod.SHARED_SERVER_MISSING == SEGMENT
+    assert SEGMENT.isascii()
+    ss.write_lane(autoweb_project, 1, generated=False)
+    ss.write_goal(autoweb_project, "daily-digest.md")
+    ss.write_trust(autoweb_project, False)
+    ss.run(autoweb_project)
+    out = capsys.readouterr().out.rstrip("\n")
+    assert SEGMENT in out
+    assert 0 < len(out) <= ss.mod.STDOUT_BUDGET

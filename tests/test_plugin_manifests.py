@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -130,6 +132,28 @@ def test_the_hooks_file_is_wrapped_and_holds_no_stop_hook():
     events = data["hooks"]
     assert "Stop" not in events, "a Stop hook is a loop; AutoWeb makes one pass"
     assert "SessionStart" in events
+
+
+def test_the_plugin_root_ships_no_mcp_server_because_it_would_start_in_every_session():
+    """Claude Code loads a `.mcp.json` at a plugin's root in every session on the machine.
+
+    Shipped here, it started `plugin:autoweb:playwright` - an npx Playwright server - in
+    every project of every user who installed the plugin, including the ones that never
+    ran AutoWeb. `/autoweb:aw-setup` writes the server into each project instead, this
+    repository included, so the file may exist on disk here but must never be tracked,
+    and `git add .` must not be able to track it.
+    """
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("git is not installed")
+    listed = subprocess.run([git, "ls-files", "--", ".mcp.json"], cwd=REPO,
+                            capture_output=True, text=True, check=False)
+    if listed.returncode != 0:
+        pytest.skip("not a git checkout")
+    assert listed.stdout.strip() == "", "a tracked .mcp.json ships an MCP server to everyone"
+    ignored = subprocess.run([git, "check-ignore", "-q", "--no-index", "--", ".mcp.json"],
+                             cwd=REPO, capture_output=True, text=True, check=False)
+    assert ignored.returncode == 0, ".gitignore must keep the generated .mcp.json out of git"
 
 
 # ------------------------------------------------------------------------------ skills

@@ -36,7 +36,10 @@ Run these and record results. Do not fix anything yet.
    Below 20 is a hard stop.
 
 2. **Config present** — does `.mcp.json` exist in the current directory with an
-   `mcpServers.playwright` entry? Expected content:
+   `mcpServers.playwright` entry? The plugin ships no MCP server: the project's own
+   `.mcp.json` is the only place this server comes from. `/autoweb:aw-setup` writes it
+   into every project it is run in, pinned to the project's `lanes.mcp_version`.
+   Expected content:
    ```json
    {
      "mcpServers": {
@@ -62,10 +65,6 @@ Run these and record results. Do not fix anything yet.
    more than one scope, record that too — project scope wins, but the user should
    know about the collision.
 
-   The `autoweb` plugin defines a `playwright` server of its own, so in a project with
-   no `.mcp.json` at all this step can still report Connected. That is a pass: the
-   server is there and the smoke test can run. Record which scope it came from.
-
 ---
 
 ## Phase 2 — Fix what is missing
@@ -75,13 +74,13 @@ Act only on what Phase 1 found missing.
 1. **Node < 20 or absent** → STOP. Tell the user to install Node 20+ and re-run
    `/autoweb:setup-playwright`. Do not attempt to install Node.
 
-2. **`.mcp.json` missing, or present without a playwright entry** → write exactly the
-   JSON from Phase 1 step 2. If the file exists with *other* servers in it, add the
-   playwright entry and leave the rest untouched.
-
-   Skip this when Phase 1 step 4 already reported the server Connected from the plugin's
-   own scope and the user did not ask for a project-scoped copy. Two definitions of the
-   same server name is the collision Phase 1 asks you to record, not a thing to create.
+2. **`.mcp.json` missing, or present without a playwright entry** → in an AutoWeb
+   project (the folder holds `autoweb.toml`), tell the user to run `/autoweb:aw-setup`,
+   which writes it, merges it beside other servers, and enables it in
+   `.claude/settings.local.json`. In any other folder, write exactly the JSON from
+   Phase 1 step 2. If the file exists with *other* servers in it, add the playwright
+   entry and leave the rest untouched. If it does not parse, stop and report it rather
+   than replace it.
 
    Add no flags. Not `--user-data-dir`, not `--isolated`, not `--headless`. Zero
    flags is the stock configuration from the official README, and browser-profile
@@ -115,8 +114,9 @@ Re-run `claude mcp get playwright`.
   1. Exit Claude Code.
   2. Restart it in this directory.
   3. **Trust the workspace** when prompted.
-  4. **Approve the `playwright` server** at the project-scope prompt. Claude Code
-     then writes `enabledMcpjsonServers` into `.claude/settings.local.json` itself.
+  4. **Approve the `playwright` server** at the project-scope prompt, if one appears.
+     Claude Code then writes `enabledMcpjsonServers` into `.claude/settings.local.json`
+     itself. In an AutoWeb project `/autoweb:aw-setup` has already written that entry.
   5. Re-run `/autoweb:setup-playwright`.
 
   Worth saying in the report: an `enabledMcpjsonServers` entry committed to a tracked

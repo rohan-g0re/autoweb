@@ -16,8 +16,9 @@ per machine, one folder per app you automate, nothing shared between those folde
   Lanes share nothing on disk, so they cannot trip over each other.
 - **Session merge-back.** What the lanes learned (rotated cookies, refreshed tokens) is
   merged three-way into the base identity, with conflicts evicted rather than guessed.
-- **Deterministic pass or fail.** Assertions are URL matches, visible text, element
-  state and commands that exit non-zero. No model grades its own work.
+- **Deterministic pass or fail.** A goal declares its assertions: URL matches, visible
+  text, element state and commands that exit non-zero. `autoweb goal check` evaluates
+  them and writes `runs/<run>/status.json`; the model never grades.
 - **One folder per app.** Identity, config, lanes, goals and runs live in the project;
   four apps are four folders with nothing shared.
 
@@ -44,8 +45,13 @@ session start only. Forking instead: clone the repo, `uv sync`, same package and
 `--init-project` writes `autoweb.toml` with the defaults below, creates `goals/` with the
 template, and adds the private files — `root.json`, `.autoweb/`, `lane-*.json`, `runs/`,
 the lane agents, `.claude/settings.local.json`, `.playwright-mcp/` — to a managed block
-in the project's `.gitignore`, and to `.git/info/exclude` when a repository exists.
-Idempotent. `--check` then confirms `root.json` is ignored and untracked.
+in the project's `.gitignore`, and to `.git/info/exclude` when a repository exists. It
+also writes the project's `.mcp.json` with one server, `playwright` (`npx
+@playwright/mcp@<lanes.mcp_version>`, no flags), and enables it in
+`.claude/settings.local.json`. The plugin ships no MCP server of its own, so a session
+has this browser only in a project that ran setup. An existing `.mcp.json` keeps its
+servers; one that does not parse is left alone. Idempotent. `--check` then confirms the
+server is declared and `root.json` is ignored and untracked.
 
 Then the one step nobody can do for you:
 
@@ -71,6 +77,9 @@ instruction when it is missing:
 ```
 autoweb: identity root.json present · 4 of 5 lanes generated · 2 goals · trust ok
 ```
+
+A project whose `.mcp.json` has no `playwright` entry also gets
+`· shared browser: not set up (run /autoweb:aw-setup)`.
 
 ## Running a goal
 
@@ -98,7 +107,7 @@ does that on its own, and `/autoweb:aw-doctor` reports any it finds outside the 
 
 ## The CLI
 
-Nine commands, through the installed `autoweb` binary or the shipped `scripts/aw.py` when
+Ten commands, through the installed `autoweb` binary or the shipped `scripts/aw.py` when
 nothing is installed. Each prints its own help; `-C DIR` runs as if started elsewhere.
 
 | command | what it does |
@@ -112,11 +121,13 @@ nothing is installed. Each prints its own help; `-C DIR` runs as if started else
 | `autoweb lanes list` | which lane files exist, generated or hand-written |
 | `autoweb trace TRACE_JSON` | did the lanes really overlap? |
 | `autoweb merge LANE_JSON...` | fold lane state back into `root.json`, three-way |
+| `autoweb goal check GOAL --run RUN` | evaluate the goal's assertions, write `runs/RUN/status.json` |
 
-`state export --from-profile DIR --visit URL` reads a profile already logged in. Four
+`state export --from-profile DIR --visit URL` reads a profile already logged in. Five
 commands are assertions rather than tools and exit non-zero when what they check does not
-hold: `config check`, `state verify`, `trace`, and `state export` when it captures nothing
-at all — an empty state file that parses is the failure most mistaken for a success.
+hold: `config check`, `state verify`, `trace`, `goal check`, and `state export` when it
+captures nothing at all — an empty state file that parses is the failure most mistaken
+for a success.
 
 ## Configuring
 

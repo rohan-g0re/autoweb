@@ -575,3 +575,18 @@ def test_trace_rejects_an_untrustworthy_trace_rather_than_judging_it(project, tm
         "lane-3": _marks(0, 1, 2, 3),
     })
     assert run(["trace", path], project) == 2
+
+
+# --- goal check -------------------------------------------------------------
+# The command itself is pinned in test_goal.py. Here: it is part of the command tree.
+
+
+def test_goal_check_is_a_command_that_resolves(project):
+    """Listed in the README's table, so argparse must accept it. A missing goal file is
+    the user's input being wrong, which is exit 2."""
+    assert run(["goal", "check", "goals/missing.md", "--run", "r1"], project) == 2
+
+
+def test_bare_goal_prints_its_help_and_fails(project, capsys):
+    assert run(["goal"], project) == 1
+    assert "check" in capsys.readouterr().out

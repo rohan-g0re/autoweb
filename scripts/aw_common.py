@@ -6,6 +6,7 @@ and the skills agree by construction on:
   * where the plugin's own code is (`PLUGIN_ROOT`, the directory above scripts/)
   * what makes a directory an AutoWeb project (`autoweb.toml`)
   * where that project's identity, lanes, goals and runs live
+  * whether that project's `.mcp.json` declares the shared `playwright` server
   * where the plugin keeps its own machine-level state (`~/.autoweb-plugin/`)
   * how an installed `autoweb` binary, `uv` and Python are found
 
@@ -57,6 +58,14 @@ RUNS_DIRNAME = "runs"
 AGENTS_DIR = Path(".claude") / "agents"
 SETTINGS_LOCAL = Path(".claude") / "settings.local.json"
 LANE_GLOB = "lane-*.md"
+
+# The project's own MCP config, and the one server in it AutoWeb cares about. The
+# plugin ships no MCP server: a plugin-root `.mcp.json` would start in every
+# session on the machine, AutoWeb project or not. `aw_setup.py --init-project`
+# writes this file into each project instead.
+MCP_JSON = ".mcp.json"
+SHARED_SERVER = "playwright"
+MCP_PACKAGE = "@playwright/mcp"
 
 
 def _package_importable() -> None:
@@ -117,8 +126,8 @@ def load_project_config(project: str | os.PathLike | None = None):
 
 def project_paths(project: str | os.PathLike | None = None, cfg=None) -> dict:
     """Where this project's own files are. Keys: toml, root_json, autoweb_dir,
-    goals_dir, runs_dir, agents_dir, settings_local. Paths are absolute; nothing
-    is created."""
+    goals_dir, runs_dir, agents_dir, settings_local, mcp_json. Paths are
+    absolute; nothing is created."""
     root = project_dir(project)
     root_json = root / "root.json"
     try:
@@ -134,7 +143,68 @@ def project_paths(project: str | os.PathLike | None = None, cfg=None) -> dict:
         "runs_dir": root / RUNS_DIRNAME,
         "agents_dir": root / AGENTS_DIR,
         "settings_local": root / SETTINGS_LOCAL,
+        "mcp_json": root / MCP_JSON,
     }
+
+
+def read_mcp_json(project: str | os.PathLike | None = None) -> tuple:
+    """`(state, data, reason)` for the project's `.mcp.json`. Never raises.
+
+    state is "absent" (no file), "unreadable" (not UTF-8, not JSON, or not a JSON
+    object; `reason` says which) or "ok" with `data` the parsed object. A file
+    holding only whitespace reads as an empty object: there is nothing in it to
+    lose. Reads the file and nothing else - no subprocess, so the hook can ask.
+    """
+    path = project_dir(project) / MCP_JSON
+    if not path.exists():
+        return "absent", None, ""
+    try:
+        # utf-8-sig for the BOM Notepad writes, as autoweb.lanes reads settings.
+        raw = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        return "unreadable", None, f"not UTF-8 ({exc.reason})"
+    except OSError as exc:
+        return "unreadable", None, f"cannot be read ({exc})"
+    if not raw.strip():
+        return "ok", {}, ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return "unreadable", None, f"not valid JSON ({exc})"
+    if not isinstance(data, dict):
+        return "unreadable", None, f"not a JSON object (a {type(data).__name__})"
+    return "ok", data, ""
+
+
+def shared_server_entry(data) -> dict | None:
+    """`mcpServers.playwright` from a parsed `.mcp.json`, or None when there is none."""
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    entry = servers.get(SHARED_SERVER) if isinstance(servers, dict) else None
+    return entry if isinstance(entry, dict) else None
+
+
+def pinned_package_version(entry) -> str | None:
+    """The version an entry's args pin `@playwright/mcp` to, or None for no pin.
+
+    `@playwright/mcp` bare, or `@latest`, pins nothing a doctor can compare.
+    """
+    args = entry.get("args") if isinstance(entry, dict) else None
+    if not isinstance(args, list):
+        return None
+    prefix = MCP_PACKAGE + "@"
+    for arg in args:
+        if isinstance(arg, str) and arg.startswith(prefix) and len(arg) > len(prefix):
+            return arg[len(prefix):]
+    return None
+
+
+def has_shared_server(project: str | os.PathLike | None = None) -> bool:
+    """Does the project's `.mcp.json` declare a `playwright` server? Never raises."""
+    try:
+        state, data, _ = read_mcp_json(project)
+        return state == "ok" and shared_server_entry(data) is not None
+    except Exception:  # noqa: BLE001 - a status line is never worth a failed hook
+        return False
 
 
 def goal_files(project: str | os.PathLike | None = None) -> list:

@@ -20,7 +20,7 @@ not source.
 Copy this into `goals/<name>.md` and fill it in. Keep the headings exactly as they are —
 `aw-run` reads them by name.
 
-```markdown
+````markdown
 # Goal: <one line saying what state the world is in when this is done>
 
 ## Target
@@ -56,21 +56,37 @@ order say so.>
 2. <sub-goal>
 3. <sub-goal, which needs 2 to have finished>
 
-## Assertion
+## Assertions
 
-<Numbered, and every one deterministic. These are what `aw-run` executes and
-reports pass or fail against, so each has to be checkable without judgement.
-The five shapes that qualify:>
+<One fenced `toml` block, one `[[assert]]` table per assertion. `autoweb goal
+check` evaluates them after the run and writes `runs/<run>/status.json`; the
+model that did the work never judges them. One example of each kind:>
 
-1. A URL match — the final URL contains `/reports/confirmed`
-2. Visible text — the page shows `Submitted successfully`
-3. An element state — the `Submit` button is disabled after submission
-4. A file that must exist — `runs/<date>-<name>/report.csv` is present and non-empty
-5. A shell command that exits 0:
-   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" state verify https://example.com/dashboard --expect-text "Signed in"`
+```toml
+[[assert]]
+id = "dashboard-loads"               # unique: a-z, 0-9 and -
+kind = "url"                         # the final URL must start with expect
+url = "https://example.com/dashboard"
+expect = "https://example.com/dashboard"
 
-<No LLM judge, no "looks right", no "the agent reports success". If you cannot
-state the assertion before the run, the goal is not specified yet.>
+[[assert]]
+id = "signed-in"
+kind = "text"                        # expect must be in the page's visible text
+url = "https://example.com/dashboard"
+expect = "Signed in"
+
+[[assert]]
+id = "report-confirmed"
+kind = "element"                     # a CSS selector that must be visible
+url = "https://example.com/reports"
+expect = "tr.report-row.confirmed"
+timeout_s = 45                       # optional; the default is 30
+
+[[assert]]
+id = "report-written"
+kind = "command"                     # run in the project root; exit 0 passes
+run = "test -s runs/{run}/report.csv"
+```
 
 ## Constraints
 
@@ -92,11 +108,11 @@ state the assertion before the run, the goal is not specified yet.>
 <Where the deliverable goes and what it contains.>
 
 The deliverable goes to `runs/<YYYY-MM-DD>-<name>/`, beside the `run-log.md`
-that `aw-run` writes there. Name the file and say what shape it is:
+and `status.json` that `aw-run` writes there. Name the file and say what shape it is:
 
 - `runs/<YYYY-MM-DD>-<name>/report.csv` — one row per record, columns
   `id,status,url`
-```
+````
 
 ## Notes on filling it in
 
@@ -108,9 +124,50 @@ that `aw-run` writes there. Name the file and say what shape it is:
   is one lane, because step two cannot start until step one finishes. The ceiling is what
   `lanes list` reports as generated, and `lanes.max` in `autoweb.toml` is a brake rather
   than a target.
-- **`## Assertion` is the only thing that decides pass or fail.** `aw-run` makes one pass
-  and reports each numbered assertion; it does not retry, heal or re-plan. Re-running is
-  the user's call.
+- **`## Assertions` is the only thing that decides pass or fail.** `aw-run` makes one
+  pass, then runs `autoweb goal check goals/<name>.md --run <YYYY-MM-DD>-<name>` and
+  reports what it printed. It does not retry, heal or re-plan. Re-running is the user's
+  call.
 - **Keep the headings.** `aw-run` reads `## Target`, `## Resources`, `## The work`,
-  `## Assertion`, `## Constraints` and `## Reporting` by name. Extra prose under a
+  `## Assertions`, `## Constraints` and `## Reporting` by name. Extra prose under a
   heading is fine; a renamed heading is not found.
+
+## The four kinds of assertion
+
+| `kind` | needs | passes when |
+|---|---|---|
+| `url` | `url`, `expect` | the final URL starts with `expect` |
+| `text` | `url`, `expect` | `expect` is in the page's visible text, ignoring case and spacing |
+| `element` | `url`, `expect` | an element matching the CSS selector `expect` is visible |
+| `command` | `run` | the command exits 0 |
+
+Every kind takes `timeout_s`, which defaults to 30. Any other key is an error, so a typo
+cannot quietly change what is checked.
+
+- **The browser kinds open `url` in a new headless browser seeded from `root.json`.**
+  Nothing a lane did carries over. The check waits for the page to load, for the network
+  to go quiet, and then two seconds more, so a single-page app that sends a logged-out
+  visitor to its login page has done so before anything is judged. A page that answers
+  with an HTTP error fails, whatever it shows.
+- **`command` runs through the shell, in the project root.** `{run}` becomes the run id
+  and `{goal}` the goal's file name without `.md`; no other braces are touched. The
+  detail in `status.json` holds the exit code and the end of the output.
+- **An observation is a command.** Some facts are only in what the run wrote down, such
+  as a value a lane read off a page. Have `## Reporting` put that fact in the
+  deliverable, then check the deliverable:
+
+  ```toml
+  [[assert]]
+  id = "order-confirmed"
+  kind = "command"
+  run = "grep -q 'Order status: confirmed' runs/{run}/report.md"
+  ```
+
+- **The result is a file.** `runs/<run>/status.json` lists each assertion with its
+  `status` (`PASS`, `FAIL`, or `ERROR` when it could not be evaluated) and a `detail`.
+  `done` is true only when every assertion passed. The command exits 0 when `done` is
+  true, 1 when it is not, and 2 when the goal is malformed or an input is missing.
+- **Try it before the run.** `autoweb goal check goals/<name>.md --run test --dry-run`
+  parses the block and prints the plan. It opens no browser and runs no command. A goal
+  with no `## Assertions` block exits 2: a goal without a checkable assertion is not a
+  goal.

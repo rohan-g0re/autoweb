@@ -9,6 +9,49 @@ exists, so a release bumps it, bumps `pyproject.toml` and `autoweb/__init__.py` 
 match, and adds an entry here, in one commit. A test asserts the manifest and the
 package agree.
 
+## [Unreleased]
+
+### Added
+
+- `autoweb goal check <goal.md> --run <run-id> [--root PATH] [--dry-run]`. It reads the
+  `toml` block under a goal's `## Assertions` heading, evaluates each
+  `[[assert]]` (`url`, `text` and `element` in a fresh headless browser seeded from
+  `root.json`, judged after the page settles; `command` through the shell in the project
+  root), and writes `runs/<run-id>/status.json` with `schema`, `goal`, `run`,
+  `checked_at`, `assertions` and `done`. Exit 0 only when every assertion passed, 1 when
+  any failed or could not be evaluated, 2 for a malformed goal or a missing input.
+  `--dry-run` parses and prints the plan and touches nothing.
+- `autoweb/goal.py` and `tests/test_goal.py`.
+- `aw_setup.py --init-project` writes `<project>/.mcp.json` with the `playwright` server
+  pinned to `lanes.mcp_version`, merges it beside existing servers, leaves an existing
+  `playwright` entry or an unparsable file alone, and adds `"playwright"` to
+  `enabledMcpjsonServers` in `.claude/settings.local.json`.
+- Doctor row `shared browser server`: OK when `.mcp.json` pins the configured version;
+  MISSING (gating) when absent, unparsable or without a `playwright` entry; NOTE when the
+  pin differs, and NOTE outside an AutoWeb project.
+- The SessionStart status line adds `shared browser: not set up (run /autoweb:aw-setup)`
+  when the project declares no `playwright` server.
+
+### Removed
+
+- The plugin-root `.mcp.json`. Claude Code loads a plugin's `.mcp.json` in every session
+  on the machine, so `plugin:autoweb:playwright` started an npx Playwright server in every
+  project of every user, including projects that never ran AutoWeb. The plugin now ships
+  no MCP server. Projects that relied on it run `/autoweb:aw-setup` once and restart the
+  session.
+
+### Changed
+
+- The goal format: `## Assertion` (prose) becomes `## Assertions` (a `toml` block). The
+  singular heading is still read. An observation is now a `command` that checks the
+  deliverable.
+- `/autoweb:aw-run` dry-runs the goal's assertions before dispatching lanes, and judges
+  the run with `autoweb goal check` instead of reading lane reports. It is complete when
+  `status.json` says `done: true` or the report names what failed.
+- README: pass or fail is decided by `autoweb goal check`, not by the model. Before this,
+  "no model grades its own work" was not true: `aw-run` had the model judge observation
+  assertions from the lanes' own reports.
+
 ## [0.2.0] - 2026-10-10
 
 First plugin release. The `autoweb` package itself is unchanged; everything below is the

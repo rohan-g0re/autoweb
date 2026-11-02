@@ -10,8 +10,9 @@ every single time. The budget is therefore hard, and so is the silence:
   * an AutoWeb project gets exactly two lines, under 700 characters together.
   * under two seconds. Everything printed is read off the filesystem:
     `autoweb.toml` through `autoweb.config`, `root.json`'s presence, the lane
-    files in `.claude/agents/`, the goal files, and the trust bit in
-    `~/.claude.json`. Nothing shells out to the CLI, because a hook that waits
+    files in `.claude/agents/`, the goal files, the trust bit in
+    `~/.claude.json`, and whether `.mcp.json` declares `playwright`. Nothing
+    shells out to the CLI, because a hook that waits
     on a subprocess is a hook that stalls the session. The one exception is
     git, asked only when `root.json` exists, held to two seconds for every
     call together, and silent on any failure: the file is live session
@@ -147,8 +148,13 @@ def trust_part(project) -> str:
     return "trust unknown"
 
 
+# Said only when it is missing. The plugin ships no MCP server, so a project whose
+# `.mcp.json` lacks `playwright` has no browser for the session itself to drive.
+SHARED_SERVER_MISSING = "shared browser: not set up (run /autoweb:aw-setup)"
+
+
 def status_line(project, cfg) -> str:
-    """One line of state: identity, lanes, goals, trust."""
+    """One line of state: identity, lanes, goals, trust, and a missing server."""
     paths = aw.project_paths(project, cfg)
     parts = [
         identity_part(paths),
@@ -156,6 +162,8 @@ def status_line(project, cfg) -> str:
         goals_part(project),
         trust_part(project),
     ]
+    if not aw.has_shared_server(project):
+        parts.append(SHARED_SERVER_MISSING)
     return "autoweb: " + " · ".join(parts)
 
 

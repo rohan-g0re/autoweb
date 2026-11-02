@@ -1,6 +1,6 @@
 ---
 name: aw-doctor
-description: "Diagnoses an AutoWeb project — prerequisites, the config, the identity and whether git would commit it, the lanes and the workspace trust — and puts the one printed fix beside each failing line. Handles 'aw doctor', 'check autoweb', 'is autoweb working', 'why did the lanes not open a browser', 'diagnose autoweb', 'autoweb is broken'."
+description: "Diagnoses an AutoWeb project — prerequisites, the project's own browser server, the config, the identity and whether git would commit it, the lanes and the workspace trust — and puts the one printed fix beside each failing line. Handles 'aw doctor', 'check autoweb', 'is autoweb working', 'why did the lanes not open a browser', 'diagnose autoweb', 'autoweb is broken'."
 disable-model-invocation: true
 ---
 
@@ -41,6 +41,14 @@ disable-model-invocation: true
    lanes is fixed by `lanes sync`, followed by a session restart, because agent files are
    read at session start only.
 
+   `shared browser server` gates in an AutoWeb project. The plugin ships no MCP server,
+   so the session's own `playwright` browser exists only when the project's `.mcp.json`
+   declares it. MISSING means the file is absent, has no `playwright` entry, or does
+   not parse. The fix is `/autoweb:aw-setup`, which writes or merges the entry, followed
+   by a session restart, because `.mcp.json` is read at session start only. For a file
+   that does not parse, the fix line says to repair it by hand first; setup never
+   overwrites it.
+
    Inside a git work tree two rows gate, because `root.json` holds live session cookies:
    - `identity ignored by git` — git's own `check-ignore` says `root.json` (and the
      configured `state.root`, when it differs) would be picked up by `git add .`. The fix
@@ -51,6 +59,10 @@ disable-model-invocation: true
      at the site.
 
    A `[NOTE]` row is an advisory and never a failure. Pass each one on as it stands:
+   - `shared browser server` — a note in two cases. The `playwright` entry pins a
+     different `@playwright/mcp` version than `lanes.mcp_version`, so the session's
+     browser and the lanes' browsers run different releases; the fix names the args to
+     set. Or the folder has no `autoweb.toml`, so no server is expected.
    - `trust` — granted, not granted, or unknown. Not granted is why four dispatched
      lanes can start zero browsers, silently; the fix is to open the folder and accept
      the prompt. Unknown means the trust record could not be read, not that it is absent.
@@ -70,6 +82,7 @@ disable-model-invocation: true
 
 5. When all three commands come back clean, say so in one line and give the numbers they
    printed: the generated lane count against `lanes.max`, whether `root.json` exists,
-   whether git ignores it, and the trust state.
+   whether git ignores it, the trust state, and the `@playwright/mcp` version the
+   project's `.mcp.json` pins.
 
 Complete when all three commands have run and every failing line has a fix beside it.

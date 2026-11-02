@@ -13,6 +13,7 @@ from datetime import UTC
 from pathlib import Path
 
 from . import __version__, lanes, state, trace
+from . import goal as goal_mod
 from . import merge as merge_mod
 from .config import Config, ConfigError, Learned
 from .lanes import LaneError
@@ -564,6 +565,73 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_goal_check(args: argparse.Namespace) -> int:
+    """Evaluate a goal's declared assertions and write ``runs/<run>/status.json``.
+
+    The verdict on a run comes from here, not from the model that did the work. Exit 0
+    only when every assertion passed, 1 when any failed or could not be evaluated, 2
+    when the goal itself is malformed or an input is missing.
+    """
+    cfg = Config.load(args.dir)
+    root_dir = cfg.root_dir
+    try:
+        run_id = goal_mod.check_run_id(args.run)
+    except goal_mod.GoalError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    status_file = goal_mod.status_path(root_dir, run_id)
+    state_path = Path(args.root).resolve() if args.root else cfg.root_state_path
+
+    try:
+        goal_path = goal_mod.find_goal(args.goal, root_dir)
+        assertions = goal_mod.load(goal_path)
+        needs_browser = any(a.kind in goal_mod.BROWSER_KINDS for a in assertions)
+        if needs_browser and not args.dry_run:
+            state.load(state_path)      # missing or malformed identity: exit 2, now
+    except (goal_mod.GoalError, StateError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        # A status file left by an earlier check would still say what that check found,
+        # possibly `done: true`, about a goal that no longer parses. Remove it.
+        if not args.dry_run and status_file.is_file():
+            status_file.unlink(missing_ok=True)
+            print(f"  removed {status_file}: it described an earlier check",
+                  file=sys.stderr)
+        return 2
+
+    label = goal_mod.goal_label(goal_path, root_dir)
+    goal_name = goal_path.stem
+    print(f"checking {len(assertions)} assertion(s) from {label} for run {run_id}")
+
+    if args.dry_run:
+        for assertion in assertions:
+            print(goal_mod.plan_line(assertion, run_id=run_id, goal_name=goal_name,
+                                     root_dir=root_dir))
+        if needs_browser and not state_path.is_file():
+            print(f"  note: {state_path} does not exist, so the real check would "
+                  f"exit 2. Create it with: autoweb state export <url>")
+        print("  --dry-run: nothing was opened, run or written")
+        return 0
+
+    outcomes = []
+    for assertion in assertions:
+        outcome = goal_mod.evaluate(assertion, root_dir=root_dir, state_path=state_path,
+                                    browser=cfg.lanes.browser, run_id=run_id,
+                                    goal_name=goal_name)
+        outcomes.append(outcome)
+        print(goal_mod.outcome_line(outcome), flush=True)
+
+    document = goal_mod.status_document(label, run_id, outcomes)
+    try:
+        goal_mod.write_status(status_file, document)
+    except goal_mod.GoalError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    passed = sum(o.status == goal_mod.PASS for o in outcomes)
+    print(f"  wrote {status_file}: {passed} of {len(outcomes)} passed, "
+          f"done: {str(document['done']).lower()}")
+    return 0 if document["done"] else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="autoweb",
@@ -687,6 +755,32 @@ def build_parser() -> argparse.ArgumentParser:
     mg.add_argument("--dry-run", action="store_true",
                     help="print the decisions and write nothing")
     mg.set_defaults(func=_cmd_merge)
+
+
+    gl = sub.add_parser(
+        "goal", help="check a goal's declared assertions")
+    gl_sub = gl.add_subparsers(dest="subcommand", metavar="<subcommand>")
+
+    gcheck = gl_sub.add_parser(
+        "check",
+        help="evaluate a goal's assertions and write runs/<run>/status.json",
+        description="Reads the toml block under the goal's '## Assertions' heading and "
+                    "evaluates each [[assert]]: url, text and element in a fresh "
+                    "headless browser seeded from root.json, command through the shell "
+                    "in the project root. Exits 0 only when every assertion passed.",
+    )
+    gcheck.add_argument("goal", help="goal file, e.g. goals/daily-digest.md")
+    gcheck.add_argument("--run", required=True, metavar="RUN_ID",
+                        help="the run being judged; status goes to runs/RUN_ID/")
+    gcheck.add_argument("--root", default=None, metavar="PATH",
+                        help="identity to seed browsers from (default: state.root "
+                             "from config)")
+    gcheck.add_argument("--dry-run", action="store_true",
+                        help="parse and print the plan; open nothing, run nothing, "
+                             "write nothing")
+    gcheck.set_defaults(func=_cmd_goal_check)
+
+    gl.set_defaults(func=lambda a: (gl.print_help(), 1)[1])
 
     ln.set_defaults(func=lambda a: (ln.print_help(), 1)[1])
     return parser

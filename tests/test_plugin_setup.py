@@ -44,6 +44,7 @@ EXPECTED_CHECKS = [
     "playwright package",
     "browser",
     *(["git bash"] if WINDOWS else []),
+    "shared browser server",
     "trust",
     "lanes",
     "identity",
@@ -684,6 +685,7 @@ def test_every_gating_check_can_pass(s, capsys, monkeypatch, make_tool, tmp_path
     bash.parent.mkdir(parents=True)
     bash.write_text("", encoding="utf-8")
     monkeypatch.setattr(s.mod, "git_bash_candidates", lambda: [bash])
+    s.mod.update_mcp_json(s.project, LaneConfig().mcp_version)   # the project's server
 
     rc, rep = report(s, capsys)
     assert [c["check"] for c in rep["checks"]
@@ -1208,7 +1210,8 @@ def test_init_is_idempotent(s, git, fresh, capsys):
     capsys.readouterr()
     before = {p: p.read_bytes() for p in (
         fresh.path / "autoweb.toml", fresh.path / ".gitignore",
-        fresh.path / ".git" / "info" / "exclude")}
+        fresh.path / ".git" / "info" / "exclude", fresh.path / ".mcp.json",
+        fresh.path / ".claude" / "settings.local.json")}
 
     assert fresh.run("--init-project") == 0
     out = capsys.readouterr().out
@@ -1295,3 +1298,220 @@ def test_without_git_the_rows_are_notes(s, capsys):
     ignored, untracked = git_rows(s, capsys)
     assert ignored["level"] == untracked["level"] == "note"
     assert ignored["detail"].startswith("git not found")
+
+
+# ------------------------------------------- the shared browser server, written
+#
+# The plugin ships no MCP server: a plugin-root .mcp.json starts in every session on
+# the machine. --init-project writes the server into the project instead.
+
+PINNED = LaneConfig().mcp_version
+SPEC = f"@playwright/mcp@{PINNED}"
+
+# What this repository used to ship at its root, byte for byte. A fresh init writes
+# exactly this, with the version filled in.
+SHIPPED_MCP_JSON = (
+    '{\n'
+    '  "mcpServers": {\n'
+    '    "playwright": {\n'
+    '      "command": "npx",\n'
+    '      "args": ["@playwright/mcp@0.0.83"]\n'
+    '    }\n'
+    '  }\n'
+    '}\n'
+)
+
+
+def mcp(path):
+    return json.loads((path / ".mcp.json").read_text(encoding="utf-8"))
+
+
+def local_settings(path):
+    return json.loads((path / ".claude" / "settings.local.json").read_text(encoding="utf-8"))
+
+
+def test_init_writes_the_shared_server_with_the_pinned_version(fresh, capsys):
+    assert fresh.run("--init-project") == 0
+    assert mcp(fresh.path) == {"mcpServers": {"playwright": {"command": "npx",
+                                                             "args": [SPEC]}}}
+    assert f"wrote .mcp.json (server `playwright`: npx {SPEC})" in capsys.readouterr().out
+
+
+def test_a_fresh_mcp_json_is_the_file_the_plugin_used_to_ship(fresh):
+    fresh.run("--init-project")
+    assert (fresh.path / ".mcp.json").read_bytes() == \
+        SHIPPED_MCP_JSON.replace("0.0.83", PINNED).encode("utf-8")
+    assert fresh.mod.fresh_mcp_json_text("0.0.83") == SHIPPED_MCP_JSON
+
+
+def test_the_server_takes_the_version_the_project_pins(fresh):
+    (fresh.path / "autoweb.toml").write_text('[lanes]\nmcp_version = "0.0.99"\n',
+                                             encoding="utf-8")
+    fresh.run("--init-project")
+    assert mcp(fresh.path)["mcpServers"]["playwright"]["args"] == ["@playwright/mcp@0.0.99"]
+
+
+def test_the_fallback_pin_is_the_packages_default_and_written_once(s):
+    """One copy of the number in the setup script, and it agrees with the package."""
+    assert s.mod.FALLBACK_MCP_VERSION == LaneConfig().mcp_version
+    source = Path(s.mod.__file__).read_text(encoding="utf-8")
+    assert source.count('"' + LaneConfig().mcp_version + '"') == 1
+
+
+def test_init_merges_the_server_beside_the_ones_already_there(fresh, capsys):
+    other = {"command": "uvx", "args": ["some-server"], "env": {"K": "v"}}
+    (fresh.path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"other": other}, "extra": 1}), encoding="utf-8")
+    assert fresh.run("--init-project") == 0
+    data = mcp(fresh.path)
+    assert data["mcpServers"]["other"] == other
+    assert data["mcpServers"]["playwright"] == {"command": "npx", "args": [SPEC]}
+    assert data["extra"] == 1
+    assert "added `playwright`" in capsys.readouterr().out
+    text = (fresh.path / ".mcp.json").read_text(encoding="utf-8")
+    assert text == json.dumps(data, indent=2) + "\n"
+
+
+def test_an_existing_playwright_entry_is_left_alone(fresh, capsys):
+    mine = ('{"mcpServers": {"playwright": {"command": "npx", '
+            '"args": ["@playwright/mcp@0.0.70", "--headless"]}}}')
+    (fresh.path / ".mcp.json").write_text(mine, encoding="utf-8")
+    assert fresh.run("--init-project") == 0
+    assert (fresh.path / ".mcp.json").read_text(encoding="utf-8") == mine
+    assert (".mcp.json already declares `playwright` (@playwright/mcp@0.0.70), left alone"
+            in capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("broken", ["{not json", "[1, 2]", '{"mcpServers": []}'],
+                         ids=["not-json", "not-an-object", "servers-not-an-object"])
+def test_a_malformed_mcp_json_is_never_overwritten(fresh, capsys, broken):
+    (fresh.path / ".mcp.json").write_text(broken, encoding="utf-8")
+    assert fresh.run("--init-project") == 0                   # the doctor is the gate
+    assert (fresh.path / ".mcp.json").read_text(encoding="utf-8") == broken
+    assert "left alone" in capsys.readouterr().out
+
+
+def test_init_enables_the_server_in_local_settings(fresh, capsys):
+    fresh.run("--init-project")
+    assert local_settings(fresh.path) == {"enabledMcpjsonServers": ["playwright"]}
+    assert ("wrote .claude/settings.local.json (enabledMcpjsonServers: playwright)"
+            in capsys.readouterr().out)
+
+
+def test_enabling_merges_into_what_lanes_sync_and_the_user_wrote(fresh, capsys):
+    settings = fresh.path / ".claude" / "settings.local.json"
+    settings.parent.mkdir(parents=True)
+    before = {"enabledMcpjsonServers": ["other"],
+              "permissions": {"allow": ["mcp__lane1", "Bash(ls)"]}, "model": "x"}
+    settings.write_text(json.dumps(before), encoding="utf-8")
+    fresh.run("--init-project")
+    assert ("added `playwright` to enabledMcpjsonServers in .claude/settings.local.json"
+            in capsys.readouterr().out)
+    after = local_settings(fresh.path)
+    assert after["enabledMcpjsonServers"] == ["other", "playwright"]
+    assert after["permissions"] == before["permissions"]
+    assert after["model"] == "x"
+    fresh.run("--init-project")
+    assert local_settings(fresh.path)["enabledMcpjsonServers"] == ["other", "playwright"]
+
+
+def test_a_malformed_local_settings_file_is_left_alone(fresh, capsys):
+    settings = fresh.path / ".claude" / "settings.local.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text("{nope", encoding="utf-8")
+    assert fresh.run("--init-project") == 0
+    assert settings.read_text(encoding="utf-8") == "{nope"
+    assert ".claude/settings.local.json is not valid JSON" in capsys.readouterr().out
+
+
+def test_init_json_reports_the_server_files(fresh, capsys):
+    assert fresh.run("--init-project", "--json") == 0
+    actions = json.loads(capsys.readouterr().out)["actions"]
+    assert any(a.startswith("wrote .mcp.json") for a in actions)
+    assert any(a.startswith("wrote .claude/settings.local.json") for a in actions)
+
+
+def test_running_init_twice_changes_neither_server_file(fresh, capsys):
+    fresh.run("--init-project")
+    files = (fresh.path / ".mcp.json", fresh.path / ".claude" / "settings.local.json")
+    before = [f.read_bytes() for f in files]
+    capsys.readouterr()
+    fresh.run("--init-project")
+    out = capsys.readouterr().out
+    assert [f.read_bytes() for f in files] == before
+    assert f".mcp.json already declares `playwright` ({SPEC}), left alone" in out
+    assert ".claude/settings.local.json already enables `playwright`" in out
+
+
+# --------------------------------------------- the shared browser server, checked
+
+def server_row(s, capsys, project=None):
+    if project is None:
+        _, rep = report(s, capsys)
+    else:
+        s.mod.main(["--check", "--json", "--cwd", str(project)])
+        rep = json.loads(capsys.readouterr().out)
+    return row(rep, "shared browser server")
+
+
+def test_a_pinned_server_passes(s, capsys):
+    s.mod.update_mcp_json(s.project, PINNED)
+    check = server_row(s, capsys)
+    assert (check["ok"], check["level"], check["fix"]) == (True, "check", "")
+    assert SPEC in check["detail"]
+
+
+def test_no_mcp_json_is_missing_and_fails_the_check(s, capsys):
+    check = server_row(s, capsys)
+    assert (check["ok"], check["level"]) == (False, "check")
+    assert check["fix"] == "run /autoweb:aw-setup"
+    assert s.run("--check") == 1
+    assert "[MISSING] shared browser server" in capsys.readouterr().out
+
+
+def test_an_mcp_json_without_playwright_is_missing(s, capsys):
+    (s.project / ".mcp.json").write_text('{"mcpServers": {"other": {}}}', encoding="utf-8")
+    check = server_row(s, capsys)
+    assert (check["ok"], check["level"]) == (False, "check")
+    assert "no `playwright` entry" in check["detail"]
+    assert check["fix"] == "run /autoweb:aw-setup"
+
+
+def test_an_unparsable_mcp_json_is_missing_with_a_repair_fix(s, capsys):
+    (s.project / ".mcp.json").write_text("{nope", encoding="utf-8")
+    check = server_row(s, capsys)
+    assert (check["ok"], check["level"]) == (False, "check")
+    assert "not valid JSON" in check["detail"]
+    assert check["fix"].startswith("repair .mcp.json by hand")
+
+
+def test_a_different_pin_is_a_note_not_a_failure(s, capsys):
+    s.mod.update_mcp_json(s.project, "0.0.70")
+    check = server_row(s, capsys)
+    assert (check["ok"], check["level"]) == (False, "note")
+    assert "@playwright/mcp@0.0.70" in check["detail"]
+    assert f"lanes.mcp_version is {PINNED}" in check["detail"]
+    assert SPEC in check["fix"]
+
+
+def test_an_unpinned_server_is_a_note(s, capsys):
+    (s.project / ".mcp.json").write_text(
+        '{"mcpServers": {"playwright": {"command": "npx", '
+        '"args": ["@playwright/mcp@latest"]}}}', encoding="utf-8")
+    check = server_row(s, capsys)
+    assert (check["ok"], check["level"]) == (False, "note")
+
+
+def test_the_pin_compared_is_the_projects(s, capsys):
+    (s.project / "autoweb.toml").write_text('[lanes]\nmcp_version = "0.0.99"\n',
+                                            encoding="utf-8")
+    s.mod.update_mcp_json(s.project, "0.0.99")
+    assert server_row(s, capsys)["ok"] is True
+
+
+def test_outside_an_autoweb_project_the_row_is_a_note(s, capsys, tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    check = server_row(s, capsys, plain)
+    assert (check["ok"], check["level"]) == (False, "note")
+    assert "no autoweb.toml here" in check["detail"]

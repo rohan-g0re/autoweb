@@ -24,15 +24,19 @@ What ships, once:
 | setup and doctor | `scripts/aw_setup.py` | `--check`, `--install`, `--init-project` |
 | skills | `skills/*/SKILL.md` | `autoweb` (model-invoked), `parallel-lanes`, `aw-setup`, `aw-doctor`, `aw-run` |
 | command | `commands/setup-playwright.md` | the Playwright MCP smoke test, unchanged |
-| MCP | `.mcp.json` | the shared `playwright` server, `npx @playwright/mcp@0.0.83`, for setup only |
 | goal template | `goals/README.md` | the goal file format; no real goals ship |
+
+The plugin ships no MCP server. Claude Code loads a plugin-root `.mcp.json` in every
+session on the machine, AutoWeb project or not, so `--init-project` writes the server
+into each project instead.
 
 What stays in each project, never in the plugin:
 
-`autoweb.toml`, `root.json` (and `.bak`), `.autoweb/` (learned state, lane
+`autoweb.toml`, `.mcp.json` (the `playwright` server, written by setup), `root.json` (and `.bak`), `.autoweb/` (learned state, lane
 profiles), `goals/*.md`, `runs/`, `lane-*.json`, `.claude/agents/lane-*.md`
 (generated, carry an absolute path to that project's `root.json` and an inline
-browser server), `.claude/settings.local.json` (the `mcp__laneN` grants).
+browser server), `.claude/settings.local.json` (the `mcp__laneN` grants and
+`enabledMcpjsonServers: ["playwright"]`).
 
 ## 2. Names
 
@@ -82,9 +86,10 @@ All verified 2026-10-10 on Claude Code 2.1.273, Windows 11, unless marked.
   graph-mempalace plugin's `docs/DESIGN.md` §4, same machine, same day.
 - Hooks run under Git Bash on Windows; the tool shells can carry a
   Windows-format PATH. Launchers resolve tools by absolute path.
-- A plugin's stdio MCP server starts with cwd = the project directory and
-  `CLAUDE_PROJECT_DIR` set. Not needed here (the only MCP server is stock
-  `npx @playwright/mcp`), recorded so nobody re-tests it.
+- A plugin-root `.mcp.json` is loaded in every session on the machine, whatever the
+  project, and its server is named `plugin:<plugin>:<server>`. That is why AutoWeb
+  ships none. Verified 2026-11-01 on Claude Code 2.1.299 with `claude mcp list` from an
+  unrelated folder.
 - Inline `mcpServers` in a project's `.claude/agents/*.md` load only after the
   folder is trusted (`~/.claude.json` → `projects[<path>].hasTrustDialogAccepted`),
   silently otherwise; `autoweb/lanes.py` already checks it. Whether a
@@ -111,7 +116,12 @@ CLAUDE_JSON                        ~/.claude.json (trust lives here)
 project_dir(cwd_from_payload=None) -> Path
 is_autoweb_project(project) -> bool           autoweb.toml exists in that directory
 load_project_config(project) -> Config|None   via autoweb.config.Config.load; None on any error, never raises
-project_paths(project, cfg=None) -> dict      keys: toml, root_json, autoweb_dir, goals_dir, runs_dir, agents_dir, settings_local
+project_paths(project, cfg=None) -> dict      keys: toml, root_json, autoweb_dir, goals_dir, runs_dir, agents_dir, settings_local, mcp_json
+MCP_JSON, SHARED_SERVER, MCP_PACKAGE          ".mcp.json", "playwright", "@playwright/mcp"
+read_mcp_json(project) -> (state, data, reason)  "absent" | "unreadable" | "ok"; never raises
+shared_server_entry(data) -> dict|None        mcpServers.playwright
+pinned_package_version(entry) -> str|None     the version in "@playwright/mcp@<v>"
+has_shared_server(project) -> bool            no subprocess; the hook uses it
 goal_files(project) -> list[Path]             goals/*.md minus README.md
 lane_files(project) -> list[Path]             .claude/agents/lane-*.md (any)
 generated_lane_files(project) -> list[Path]   those carrying autoweb.lanes.GENERATED_MARKER
@@ -148,6 +158,9 @@ autoweb: identity root.json present · 4 of 5 lanes generated · 2 goals · trus
 autoweb: this project automates websites with AutoWeb. Goals live in goals/, runs in runs/; use the autoweb skill or /autoweb:aw-run <goal>.
 ```
 
+When `.mcp.json` has no `playwright` entry the status line ends with
+`· shared browser: not set up (run /autoweb:aw-setup)`.
+
 Variants: `identity missing (run: autoweb state export <url>)`, `no lanes
 (run: autoweb lanes sync)`, `trust not granted (open the folder and accept the
 prompt)`, `trust unknown`. Exits 0 always; errors go to the log.
@@ -163,7 +176,10 @@ binary found, or "running in place from the plugin"), `playwright package`
 (importable from the installed tool env; required only for `state export`),
 `browser` (per `lanes.browser` in the project's config when present, else
 chromium; checks Playwright's cache or the Chrome install path), `git bash`
-(Windows only), `trust` (NOTE: granted / not granted / unknown; never a failure),
+(Windows only), `shared browser server` (OK when `.mcp.json` declares `playwright`
+pinned to `@playwright/mcp@<lanes.mcp_version>`; MISSING, gating, when the file is
+absent, unparsable or has no `playwright` entry, fix `run /autoweb:aw-setup`; NOTE when
+the pin differs; NOTE outside an AutoWeb project), `trust` (NOTE: granted / not granted / unknown; never a failure),
 `lanes` (NOTE: generated count vs `lanes.max`), `identity` (NOTE: `root.json`
 present or not), `identity ignored by git` and `identity untracked` (below).
 
@@ -210,6 +226,14 @@ keeps the identity out of git in two ways, then says what it did. Idempotent.
    with `rev-parse --show-prefix`, because `info/exclude` is read from the top of
    the work tree: a pattern naming a path is anchored at the project, a bare name
    becomes `/<prefix>**/<name>`. Only missing lines are appended.
+
+It also writes `<project>/.mcp.json` when absent, byte for byte the file the plugin root
+used to ship (`npx @playwright/mcp@<lanes.mcp_version>`, no flags). It merges a
+`playwright` entry into an existing file with indent 2. It leaves an existing
+`playwright` entry, or a file that does not parse, untouched and says so. Then it adds
+`"playwright"` to `enabledMcpjsonServers` in `.claude/settings.local.json`, using the
+same read-modify-write as `lanes.sync_permissions`. Neither write affects the exit
+code; the doctor row is the gate.
 
 The earlier design wrote only to `<project>/.git/info/exclude`, and an audit
 found three ways it left `root.json` one `git add .` from a commit: a project in
@@ -277,3 +301,47 @@ and macos across Python 3.11 and 3.12.
   bash block; backtick paths, no markdown links to files.
 - Version bumps happen in a release commit with a CHANGELOG entry.
 - Nothing tracked names a person, a machine path, or a profile directory.
+
+## 8. Goal assertions and `status.json`
+
+Added after 0.2.0. It replaces the last two clauses of the `aw-run` bullet in §5.6: the
+run is judged by `autoweb goal check`, not by the model reading lane reports.
+`goals/README.md` is the authoring format; this section is the contract a program reads.
+
+- **Source.** One or more fenced `toml` blocks under the goal's `## Assertions` heading
+  (`## Assertion` is also read). Each `[[assert]]` has `id` (`[a-z0-9-]+`, unique),
+  `kind` (`url` | `text` | `element` | `command`) and optional `timeout_s` (default 30).
+  The browser kinds take `url` and `expect`; `command` takes `run`. Any other key is an
+  error. No block, or no `[[assert]]`, exits 2 with "a goal without a checkable
+  assertion is not a goal".
+- **Command.** `autoweb goal check <goal.md> --run <run-id> [--root PATH] [--dry-run]`.
+  The goal may be named as `goals/x.md`, `x.md` or `x`. The run id is one directory name
+  under `runs/`.
+- **Evaluation.** `url`, `text` and `element` each open a new headless browser seeded
+  from `root.json` (or `--root`), the same seeding as `state verify`. They wait for
+  `load`, then `networkidle` up to 10 s, then 2 s more, and only then judge, because
+  `state verify` judges at `domcontentloaded` and so passes a logged-out single-page app
+  that has not yet redirected. An HTTP status of 400 or above fails. `url` passes when
+  the final URL starts with `expect`; `text` when `expect` is in the visible text,
+  ignoring case and whitespace; `element` when an element matching the CSS selector is
+  visible. `command` runs with `shell=True`, `cwd` the project root, `{run}` and
+  `{goal}` (the file name without `.md`) substituted, and its process tree killed at the
+  timeout.
+- **`runs/<run-id>/status.json`.** Written atomically, `indent=2`, sorted keys, ASCII, LF:
+  `schema` (1), `goal` (project-relative path), `run`, `checked_at` (UTC,
+  `YYYY-MM-DDTHH:MM:SSZ`), `assertions` (each `id`, `kind`, `status`, `detail`) and
+  `done`. `status` is `PASS`, `FAIL`, or `ERROR` when the assertion could not be
+  evaluated (the browser failed, the page did not load, the command timed out). `done`
+  is true only when every assertion is `PASS`.
+- **Exit codes.** 0 when `done` is true. 1 when any assertion is `FAIL` or `ERROR`. 2 for
+  a malformed goal, a bad run id, a missing goal file, or browser assertions with no
+  identity file; no `status.json` is written then, and one left by an earlier check of
+  that run is removed, so a stale `done: true` cannot outlive the goal it described.
+- **`--dry-run`.** Parses, prints one `PLAN` line per assertion, opens nothing, runs
+  nothing, writes nothing. Exit 0 when the goal is well formed, even without
+  `root.json`, so goal files can be checked where no identity exists.
+- **Verified.** Offline by `tests/test_goal.py`. Live on 2026-11-01 against
+  `example.com` with Playwright's bundled Chromium on Windows: `url`, `text` and
+  `element` passes and fails, a DNS failure reported as `ERROR`, a 404 as `FAIL`, a
+  command killed at a 2 s timeout, and a `data:` page that redirects from script after
+  1.5 s judged at the page it redirected to.

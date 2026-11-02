@@ -16,6 +16,9 @@ What has to be true before a lane opens a browser:
     playwright package    needed by `state export` and `state verify`, nothing else
     browser               a real browser on disk: Playwright's cache or Chrome's
     git bash              Windows only; the hooks and skills run through it
+    shared browser server the project's .mcp.json declares `playwright`, pinned
+                          to lanes.mcp_version (NOTE on a different pin, and
+                          NOTE outside an AutoWeb project)
     trust                 NOTE - without it a lane's inline MCP server never starts
     lanes                 NOTE - how many agent files exist, and any profile leak
     identity              NOTE - root.json, the state every lane is seeded from
@@ -45,10 +48,17 @@ manager on someone's behalf is how a "check my prerequisites" command ends up
 owning a broken toolchain. When either is missing the row prints the official
 command for this OS and stops.
 
-It writes nothing into any settings file. The lane permission grants in
-`.claude/settings.local.json` belong to `autoweb lanes sync`, which knows how
-many lanes there are; `--init-project` touches only `autoweb.toml`, `goals/`,
-a marked block in the project's `.gitignore`, and the `info/exclude` git reads.
+It writes one key of one settings file and no other. The lane permission
+grants in `.claude/settings.local.json` belong to `autoweb lanes sync`, which
+knows how many lanes there are; `--init-project` touches only `autoweb.toml`,
+`goals/`, a marked block in the project's `.gitignore`, the `info/exclude` git
+reads, the `playwright` entry in the project's `.mcp.json`, and `"playwright"`
+in that settings file's `enabledMcpjsonServers` list.
+
+The plugin itself ships no MCP server. A `.mcp.json` at the plugin root is
+loaded in every session on the machine, so it started an npx Playwright server
+in projects that never asked for AutoWeb. The server is written into each
+project that runs setup, and only there.
 
 Usage
 -----
@@ -93,6 +103,7 @@ GIT_BASH_CHECK = "git bash"
 TRUST_CHECK = "trust"
 LANES_CHECK = "lanes"
 IDENTITY_CHECK = "identity"
+SHARED_SERVER_CHECK = "shared browser server"
 IGNORED_CHECK = "identity ignored by git"
 UNTRACKED_CHECK = "identity untracked"
 
@@ -123,6 +134,7 @@ NODE_INSTALL_LINUX = (f"install Node {MIN_NODE} or newer from https://nodejs.org
 
 INSTALL_FIX = "run --install"
 SETUP_SKILL = "/autoweb:aw-setup"
+SHARED_SERVER_FIX = f"run {SETUP_SKILL}"
 EXPORT_HINT = "autoweb state export <url>"
 TRUST_FIX = "open this folder in Claude Code and accept the trust prompt"
 LANES_FIX = "autoweb lanes sync"
@@ -226,6 +238,12 @@ def package_defaults():
     return LaneConfig(), StateConfig(), CapsConfig()
 
 
+# The pin of record, used only when the shipped package cannot be imported. The
+# real default is `LaneConfig.mcp_version` in autoweb/config.py; this is the one
+# copy of the number in the plugin's scripts.
+FALLBACK_MCP_VERSION = "0.0.83"
+
+
 def pinned_mcp_version(cfg=None) -> str:
     """`lanes.mcp_version` for this project, else the package default."""
     try:
@@ -233,7 +251,7 @@ def pinned_mcp_version(cfg=None) -> str:
             return str(cfg.lanes.mcp_version)
         return str(package_defaults()[0].mcp_version)
     except Exception:
-        return "0.0.83"  # the pin of record; only reachable if the package is broken
+        return FALLBACK_MCP_VERSION  # only reachable if the package is broken
 
 
 def _run(argv: list, timeout: float = 30):
@@ -607,6 +625,53 @@ def trust_check(project: Path) -> Check:
                  fix=TRUST_FIX, level=LEVEL_NOTE)
 
 
+def shared_server_check(project: Path, cfg) -> Check:
+    """Does the project's `.mcp.json` declare the `playwright` server, at the pin?
+
+    The plugin ships no server, so the session's own browser exists only when
+    the project's `.mcp.json` declares it. Absent, unparsable, or without a
+    `playwright` entry is MISSING in an AutoWeb project, because setup writes
+    it. A different pin is a NOTE: the server still starts, just not at the
+    version the lanes run, and setup never rewrites an entry that is there.
+
+    Outside an AutoWeb project the row is a NOTE whatever it finds, because no
+    server is expected in a folder that never opted in.
+    """
+    version = pinned_mcp_version(cfg)
+    spec = f"{aw.MCP_PACKAGE}@{version}"
+    name = aw.MCP_JSON
+    if not aw.is_autoweb_project(project):
+        has = aw.has_shared_server(project)
+        tail = (f"{name} declares `{aw.SHARED_SERVER}` anyway" if has
+                else f"{SETUP_SKILL} writes {name} with the rest")
+        return Check(SHARED_SERVER_CHECK, has,
+                     f"no {aw.CONFIG_FILENAME} here, so no server is expected; {tail}",
+                     fix=SHARED_SERVER_FIX, level=LEVEL_NOTE)
+    state, data, reason = aw.read_mcp_json(project)
+    if state == "absent":
+        return Check(SHARED_SERVER_CHECK, False,
+                     f"no {name}, so a session here has no `{aw.SHARED_SERVER}` server",
+                     fix=SHARED_SERVER_FIX)
+    if state != "ok":
+        return Check(SHARED_SERVER_CHECK, False,
+                     f"{name} is {reason}, so setup leaves it alone",
+                     fix=f"repair {name} by hand, then {SHARED_SERVER_FIX}")
+    entry = aw.shared_server_entry(data)
+    if entry is None:
+        return Check(SHARED_SERVER_CHECK, False,
+                     f"{name} has no `{aw.SHARED_SERVER}` entry", fix=SHARED_SERVER_FIX)
+    found = aw.pinned_package_version(entry)
+    if found == version:
+        return Check(SHARED_SERVER_CHECK, True,
+                     f"{name} declares `{aw.SHARED_SERVER}`: {spec}")
+    pinned = f"{aw.MCP_PACKAGE}@{found}" if found else f"{aw.MCP_PACKAGE} with no pin"
+    return Check(SHARED_SERVER_CHECK, False,
+                 f"{name} declares `{aw.SHARED_SERVER}` as {pinned}, but "
+                 f"lanes.mcp_version is {version}",
+                 fix=f'set its args to ["{spec}"] in {name}, then restart the session',
+                 level=LEVEL_NOTE)
+
+
 def leaking_profiles(project: Path, generated: list) -> list:
     """Generated lanes whose `--user-data-dir` points outside this project.
 
@@ -801,6 +866,7 @@ def collect(project: Path) -> Report:
     rep.checks.append(browser_check(resolve_browser(cfg)))
     if os.name == "nt":
         rep.checks.append(git_bash_check())
+    rep.checks.append(shared_server_check(project, cfg))
     rep.checks.append(trust_check(project))
     rep.checks.append(lanes_check(project, cfg))
     rep.checks.append(identity_check(paths))
@@ -1251,6 +1317,132 @@ def update_git_excludes(project: Path, patterns: list, where: GitWhere) -> list:
 
 
 # ---------------------------------------------------------------------------
+# the shared browser server
+# ---------------------------------------------------------------------------
+def shared_server_spec(version: str) -> dict:
+    """The `playwright` entry: npx, the pinned package, and no flags at all."""
+    return {"command": "npx", "args": [f"{aw.MCP_PACKAGE}@{version}"]}
+
+
+def fresh_mcp_json_text(version: str) -> str:
+    """A new `.mcp.json` holding only the shared server, laid out by hand.
+
+    Byte for byte the file this repository used to ship at its root, with the
+    version filled in. `json.dumps(indent=2)` would spread the one-item `args`
+    list over three lines. A merge into an existing file uses it anyway: that
+    file's layout is its owner's, and one plain rewrite disturbs it least.
+    """
+    spec = shared_server_spec(version)
+    return "\n".join([
+        "{",
+        '  "mcpServers": {',
+        f"    {json.dumps(aw.SHARED_SERVER)}: {{",
+        f'      "command": {json.dumps(spec["command"])},',
+        f'      "args": {json.dumps(spec["args"])}',
+        "    }",
+        "  }",
+        "}",
+        "",
+    ])
+
+
+def update_mcp_json(project: Path, version: str) -> list:
+    """Declare the `playwright` server in `<project>/.mcp.json`. Returns the actions.
+
+    Absent: write it. Present with a `playwright` entry: leave the file alone and
+    say what it pins. Present with other servers: add ours beside them and write
+    the object back with indent 2. Not readable as a JSON object: say why and
+    write nothing, because a guess would destroy somebody's config.
+
+    Never a failure of the init. The doctor's `shared browser server` row is the
+    gate, and it says the same thing on every check until the file is fixed.
+    """
+    name = aw.MCP_JSON
+    path = Path(project) / name
+    spec = f"{aw.MCP_PACKAGE}@{version}"
+    state, data, reason = aw.read_mcp_json(project)
+    if state == "absent":
+        try:
+            path.write_text(fresh_mcp_json_text(version), encoding="utf-8", newline="\n")
+        except OSError as exc:
+            return [f"{name} could not be written ({exc}); no shared browser server"]
+        return [f"wrote {name} (server `{aw.SHARED_SERVER}`: npx {spec})"]
+    if state != "ok":
+        return [(f"{name} is {reason}; left alone, so no shared browser server - "
+                 f"repair it and run setup again")]
+    entry = aw.shared_server_entry(data)
+    if entry is not None:
+        found = aw.pinned_package_version(entry)
+        pinned = f"{aw.MCP_PACKAGE}@{found}" if found else "no version pin"
+        return [f"{name} already declares `{aw.SHARED_SERVER}` ({pinned}), left alone"]
+    servers = data.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        return [(f"{name}: `mcpServers` is not an object; left alone, so no shared "
+                 f"browser server")]
+    if aw.SHARED_SERVER in servers:
+        return [f"{name}: `mcpServers.{aw.SHARED_SERVER}` is not an object; left alone"]
+    others = list(servers)
+    servers[aw.SHARED_SERVER] = shared_server_spec(version)
+    try:
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8", newline="\n")
+    except OSError as exc:
+        return [f"{name} could not be written ({exc}); no shared browser server"]
+    beside = f" beside {', '.join(others)}" if others else ""
+    return [f"added `{aw.SHARED_SERVER}` (npx {spec}) to {name}{beside}"]
+
+
+def enable_shared_server(project: Path) -> list:
+    """Add `"playwright"` to `enabledMcpjsonServers` in `.claude/settings.local.json`.
+
+    The same read-modify-write `autoweb lanes sync` does for its permission rules
+    in this file: UTF-8 with or without a BOM, refuse anything that is not a JSON
+    object rather than replace it, touch one key, write only on a change. Not
+    imported from `autoweb.lanes`, because that function raises on a bad file and
+    setup reports and carries on.
+
+    The entry spares the approval prompt for a server setup itself just wrote.
+    Claude Code honours it only once the folder is trusted.
+    """
+    rel = aw.SETTINGS_LOCAL.as_posix()
+    path = Path(project) / aw.SETTINGS_LOCAL
+    key = "enabledMcpjsonServers"
+    data: dict = {}
+    raw = ""
+    if path.exists():
+        try:
+            raw = path.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError as exc:
+            return [(f"{rel} is not UTF-8 ({exc.reason}); left alone, so "
+                     f"`{aw.SHARED_SERVER}` is not enabled there")]
+        except OSError as exc:
+            return [f"{rel} could not be read ({exc}); left alone"]
+        try:
+            data = json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError as exc:
+            return [(f"{rel} is not valid JSON ({exc}); left alone, so "
+                     f"`{aw.SHARED_SERVER}` is not enabled there")]
+        if not isinstance(data, dict):
+            return [f"{rel} is not a JSON object; left alone"]
+    enabled = data.setdefault(key, [])
+    if not isinstance(enabled, list):
+        return [f"{rel}: `{key}` is not a list; left alone"]
+    if aw.SHARED_SERVER in enabled:
+        return [f"{rel} already enables `{aw.SHARED_SERVER}`"]
+    enabled.append(aw.SHARED_SERVER)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8")
+    except OSError as exc:
+        return [(f"{rel} could not be written ({exc}); `{aw.SHARED_SERVER}` is not "
+                 f"enabled there")]
+    if raw:
+        return [f"added `{aw.SHARED_SERVER}` to {key} in {rel}"]
+    return [f"wrote {rel} ({key}: {aw.SHARED_SERVER})"]
+
+
+# ---------------------------------------------------------------------------
 # the init itself
 # ---------------------------------------------------------------------------
 def init_project(project: Path) -> tuple:
@@ -1261,10 +1453,12 @@ def init_project(project: Path) -> tuple:
     means the identity it is about to hold is one `git add .` from being
     published. Finding no repository is not a failure.
 
-    Four things, and deliberately no more: the config that opts the folder in,
-    the directory goals live in, the `.gitignore` block and the local git
-    excludes. No identity (that needs a browser and a human), no lanes
-    (`autoweb lanes sync` owns those and needs the config first), no settings.
+    Six things, and deliberately no more: the config that opts the folder in,
+    the directory goals live in, the `.gitignore` block, the local git
+    excludes, the shared `playwright` server in `.mcp.json`, and its name in
+    `enabledMcpjsonServers`. No identity (that needs a browser and a human), no
+    lanes (`autoweb lanes sync` owns those and needs the config first), and no
+    other setting.
     """
     project = Path(project)
     actions: list = []
@@ -1301,6 +1495,11 @@ def init_project(project: Path) -> tuple:
     actions += lines
     ok = ok and written
     actions += update_git_excludes(project, patterns, git_where(project))
+
+    # After the config is written, so a `lanes.mcp_version` it already had is
+    # the pin the server gets.
+    actions += update_mcp_json(project, pinned_mcp_version(aw.load_project_config(project)))
+    actions += enable_shared_server(project)
     return actions, ok
 
 
@@ -1339,7 +1538,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="install the autoweb package and a browser through uv")
     ap.add_argument("--init-project", dest="init_project", action="store_true",
                     help="write autoweb.toml, create goals/, write the .gitignore "
-                         "block, extend .git/info/exclude")
+                         "block, extend .git/info/exclude, declare the playwright "
+                         "server in .mcp.json and enable it")
     ap.add_argument("--json", dest="as_json", action="store_true",
                     help="print the result as JSON instead of a table")
     ap.add_argument("--cwd", default=None, metavar="DIR",
