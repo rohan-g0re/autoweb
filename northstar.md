@@ -25,7 +25,9 @@
     line holds for a cookie-session site. That same merge also lost 737 partitioned
     cookie rows while reporting `0 evicted`, because the cookie identity ignored
     `partitionKey`; fixed, with the write now refused if any ancestor cookie is
-    unaccounted for. Owed: the re-merge on the fixed code, and a site whose auth lives
+    unaccounted for. The re-merge on the fixed code ran 2026-11-02 under the recency
+    rule: 0 evicted, 11 resolved, `goal check` 7 of 7 against the merged identity, on
+    the Windows laptop. Owed: the same on the Linux box, and a site whose auth lives
     behind MFA or in IndexedDB rather than in a cookie.
 
 

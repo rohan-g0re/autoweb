@@ -13,6 +13,9 @@ package agree.
 
 ### Added
 
+- First real run of `aw-run` end to end with `goal check`, and the first real merge
+  under the recency rule (2026-11-02, four LinkedIn lanes, 0 evicted, 11 resolved,
+  7 of 7 assertions against the merged identity). Windows smoke run; Linux repeat owed.
 - A second plugin in this marketplace, `autoweb-loop` 0.1.0, at `plugins/autoweb-loop/`
   and installed on its own as `autoweb-loop@autoweb`. It adds `/autoweb-loop:aw-loop` and
   a Stop hook that re-runs a goal until every assertion in its `status.json` passes or a

@@ -154,13 +154,23 @@ then later lane-file save - and prints a `resolved:` line for each pick. Evictio
 only for a host marked `rotates = true`. The reason is in the `autoweb/merge.py`
 docstring: a value cannot tell a rotated credential from a browser-minted one, and the
 allowlist failed open into a sign-out on every per-browser name it lacked. IndexedDB is
-now compared per database and per object store. The recency rule is offline-tested
-only. The real merge above ran under the allowlist, and no real four-lane merge has
-been run under the new rule yet.
+now compared per database and per object store.
 
-What line 6 does **not** cover: a site whose auth lives in IndexedDB or behind MFA, a
-lane that writes rather than reads, and a real merge under the recency rule. Everything
-proven is proven for one cookie-session site.
+The recency rule has run for real once, on 2026-11-02: four lanes read four LinkedIn
+pages at once, each saved its state, and the merge wrote `root.json` with 0 evicted and
+11 `resolved:` lines, every one of them a browser-minted value (`__cf_bm`, `_px3`,
+`lidc`, PerimeterX storage keys, a badge counter) and none of them `li_at` or
+`JSESSIONID`. The old allowlist rule would have evicted linkedin.com on that same input.
+`autoweb goal check` then seeded a fresh browser from the merged file and landed on
+`/feed/` signed in: 7 of 7 assertions passed, `done: true`. Caveat that matters: that
+run was on the Windows laptop, which this file says is not the gate, so it is a smoke
+proof until the Linux box repeats it. Outside count during the run: four `--isolated`
+servers, four Chrome profile directories, all four alive together for 14 seconds by the
+lanes' own clocks.
+
+What line 6 does **not** cover: a site whose auth lives in IndexedDB or behind MFA, and
+a lane that writes rather than reads. Everything proven is proven for one cookie-session
+site.
 
 The suite is entirely offline. It covers config parsing, state file accounting, lane
 file generation, merge arithmetic, trace judgement and the CLI's exit codes; none of it
