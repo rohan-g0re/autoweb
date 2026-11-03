@@ -1,5 +1,8 @@
 # Start here
 
+> Historical. Written before the plugin existed and kept for the reasoning; where it
+> disagrees with `docs/PLUGIN-DESIGN.md`, `CLAUDE.md` or the code, those win.
+
 For whoever picks this up on a machine that has not seen it before. Read this, then
 `CLAUDE.md`, then `docs/CONSTRAINTS.md`; add `docs/PLUGIN-DESIGN.md` if you are touching
 the plugin tree. Fifteen minutes, and you will know as much as the last session did.

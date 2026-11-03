@@ -48,10 +48,12 @@ and ask which one.
    out.
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" state verify <target url>
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/py.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/aw.py" -C "$PWD" state verify <target url> --expect-url "<target url path>"
    ```
 
-   Keep its output; it goes in the run log. When it fails because there is no
+   `--expect-url` takes a substring the landed URL must contain; give it the path of the
+   target, such as `/feed/`, because without it a site that serves its login form at the
+   same URL would pass. Keep its output; it goes in the run log. When it fails because there is no
    `root.json`, stop and tell the user to run `state export <target url>` and log in by
    hand — AutoWeb never sees a password. Done when the command has run and its exit code
    and output are recorded, or the run has stopped for a missing identity.

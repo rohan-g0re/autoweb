@@ -1,5 +1,8 @@
 # Build spec
 
+> Historical. Written before the plugin existed and kept for the reasoning; where it
+> disagrees with `docs/PLUGIN-DESIGN.md`, `CLAUDE.md` or the code, those win.
+
 Everything finalised, in one place. Decisions only — the reasoning lives in
 `CONSTRAINTS.md`, `STORAGE-EXPORT.md`, `PROFILE-LANES.md`, `SERVERS.md`.
 

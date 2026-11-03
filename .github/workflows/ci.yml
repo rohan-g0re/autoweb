@@ -16,7 +16,7 @@ jobs:
           node-version: "20"
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g @anthropic-ai/claude-code@2.1.299
 
       # `claude plugin validate` is offline and needs no login: it reads the
       # manifests, skills and hooks from disk and makes no API call. Verified

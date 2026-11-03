@@ -1,5 +1,8 @@
 # Build plan
 
+> Historical. Written before the plugin existed and kept for the reasoning; where it
+> disagrees with `docs/PLUGIN-DESIGN.md`, `CLAUDE.md` or the code, those win.
+
 Phases. Each one: **plan → build → test by an independent Fable subagent → commit on
 pass**. A phase that fails goes back to Fable for diagnosis, the foreground worker
 fixes, and the same phase re-runs. No phase starts before the one above it is green.

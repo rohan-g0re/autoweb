@@ -1,7 +1,7 @@
 {
   "name": "autoweb",
-  "version": "0.2.0",
-  "description": "A browser automation harness for Claude Code: one identity, config, lanes, goals and runs per project, and nothing shared between projects.",
+  "version": "0.3.0",
+  "description": "A browser automation plugin for Claude Code: one saved login, parallel browser lanes, a merge of their state, goals and runs per project, and nothing shared between projects.",
   "author": {
     "name": "rohan-g0re"
   },

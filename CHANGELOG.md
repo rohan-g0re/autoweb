@@ -9,7 +9,7 @@ exists, so a release bumps it, bumps `pyproject.toml` and `autoweb/__init__.py` 
 match, and adds an entry here, in one commit. A test asserts the manifest and the
 package agree.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-03
 
 ### Added
 
