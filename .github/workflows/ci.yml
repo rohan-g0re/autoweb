@@ -6,7 +6,7 @@ on:
 
 jobs:
   validate:
-    name: plugin validate (strict)
+    name: plugin validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,12 +20,18 @@ jobs:
 
       # `claude plugin validate` is offline and needs no login: it reads the
       # manifests, skills and hooks from disk and makes no API call. Verified
-      # locally on Claude Code 2.1.273, 2026-10-10. (`--json` exists on some CLI
+      # locally on Claude Code 2.1.299, 2026-11-03. (`--json` exists on some CLI
       # versions and not others, so CI relies on the exit code.) `--strict` turns
-      # warnings into failures, which is the point -- an unknown manifest key
-      # otherwise loads silently and does nothing.
-      - name: Validate plugin
-        run: claude plugin validate . --strict
+      # warnings into failures, which is the point for the loop plugin -- an
+      # unknown manifest key otherwise loads silently and does nothing. The root
+      # plugin cannot run strict: since 2.1.299 the validator warns that CLAUDE.md
+      # at a plugin root is not loaded as project context, and this repository is
+      # both the plugin and the place that file is developed in, so the warning is
+      # permanent and the root run accepts warnings while still failing on errors.
+      - name: Validate the root plugin and the marketplace
+        run: claude plugin validate .
+      - name: Validate the loop plugin, strictly
+        run: claude plugin validate plugins/autoweb-loop --strict
 
   pytest:
     name: pytest (${{ matrix.os }}, Python ${{ matrix.python }})
