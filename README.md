@@ -1,5 +1,9 @@
 # AutoWeb
 
+<p align="center">
+  <img src="docs/img/autoweb.jpg" alt="AutoWeb 0.3.0: parallel browsers that start signed in" width="560">
+</p>
+
 A browser automation plugin for Claude Code, deliberately small. The engine is Claude
 Code; the browser is Microsoft's `@playwright/mcp`; between them, markdown. One install
 per machine, one folder per app you automate, nothing shared between those folders.
